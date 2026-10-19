@@ -63,6 +63,14 @@ impl Playable {
     pub fn same(&self, other: &Self) -> bool {
         self.id() == other.id()
     }
+
+    /// Local playlist items without a matching file can't be played.
+    pub fn is_playable(&self) -> bool {
+        match self {
+            Playable::Track(track) => !track.is_missing_local_file(),
+            Playable::Episode(_) => true,
+        }
+    }
 }
 
 impl Data for Playable {

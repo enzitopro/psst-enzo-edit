@@ -69,6 +69,7 @@ pub fn saved_tracks_widget() -> impl Widget<AppState> {
             data.with_library_mut(|library| {
                 library.saved_tracks.update(r);
             });
+            data.resort_tracks();
         },
     )
     .on_command_async(
@@ -78,6 +79,7 @@ pub fn saved_tracks_widget() -> impl Widget<AppState> {
             data.with_library_mut(|library| {
                 library.add_track(t);
             });
+            data.resort_tracks();
         },
         |_, data, (_, r)| {
             if let Err(err) = r {

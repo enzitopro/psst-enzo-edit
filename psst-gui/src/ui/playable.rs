@@ -51,28 +51,35 @@ where
 }
 
 fn playable_widget(display: Display) -> impl Widget<PlayRow<Playable>> {
+    // The `List` reuses row widgets by index, so when the tracks are sorted a
+    // row gets another track.  The lenses must read the row's current item,
+    // the one captured at construction is only a fallback for the moment the
+    // switcher hasn't rebuilt a row that changed kind yet.
     ViewSwitcher::new(
         |row: &PlayRow<Playable>, _| mem::discriminant(&row.item),
         move |_, row: &PlayRow<Playable>, _| match row.item.clone() {
-            // TODO: Do the lenses some other way.
-            Playable::Track(track) => track::playable_widget(&track, display.track)
+            Playable::Track(fallback) => track::playable_widget(display.track)
                 .lens(Map::new(
-                    move |pb: &PlayRow<Playable>| pb.with(track.clone()),
+                    move |pb: &PlayRow<Playable>| match &pb.item {
+                        Playable::Track(track) => pb.with(track.clone()),
+                        Playable::Episode(_) => pb.with(fallback.clone()),
+                    },
                     |_, _| {
                         // Ignore mutation.
                     },
                 ))
                 .boxed(),
-            Playable::Episode(episode) => {
-                episode::playable_widget()
-                    .lens(Map::new(
-                        move |pb: &PlayRow<Playable>| pb.with(episode.clone()),
-                        |_, _| {
-                            // Ignore mutation.
-                        },
-                    ))
-                    .boxed()
-            }
+            Playable::Episode(fallback) => episode::playable_widget()
+                .lens(Map::new(
+                    move |pb: &PlayRow<Playable>| match &pb.item {
+                        Playable::Episode(episode) => pb.with(episode.clone()),
+                        Playable::Track(_) => pb.with(fallback.clone()),
+                    },
+                    |_, _| {
+                        // Ignore mutation.
+                    },
+                ))
+                .boxed(),
         },
     )
 }
@@ -292,15 +299,27 @@ where
     ) {
         match event {
             Event::Notification(note) => {
-                if let Some(position) = note.get(cmd::PLAY) {
+                if let Some(&clicked) = note.get(cmd::PLAY) {
+                    // Leave out local items without a file, and shift the
+                    // position to account for the ones skipped before it.
                     let mut items = Vector::new();
-                    data.data.for_each(|item, _| items.push_back(item));
-                    let payload = PlaybackPayload {
-                        items,
-                        origin: data.data.origin(),
-                        position: position.to_owned(),
-                    };
-                    ctx.submit_command(cmd::PLAY_TRACKS.with(payload));
+                    let mut position = None;
+                    data.data.for_each(|item, index| {
+                        if item.is_playable() {
+                            if position.is_none() && index >= clicked {
+                                position = Some(items.len());
+                            }
+                            items.push_back(item);
+                        }
+                    });
+                    if !items.is_empty() {
+                        let payload = PlaybackPayload {
+                            items,
+                            origin: data.data.origin(),
+                            position: position.unwrap_or(0),
+                        };
+                        ctx.submit_command(cmd::PLAY_TRACKS.with(payload));
+                    }
                     ctx.set_handled();
                 }
             }

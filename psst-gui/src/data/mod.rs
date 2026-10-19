@@ -4,6 +4,7 @@ pub mod config;
 mod ctx;
 mod find;
 mod id;
+mod lyrics;
 mod nav;
 mod playback;
 mod playlist;
@@ -40,6 +41,7 @@ pub use crate::data::{
     config::{AudioQuality, Authentication, Config, Preferences, PreferencesTab, Theme},
     ctx::Ctx,
     find::{FindQuery, Finder, MatchFindQuery},
+    lyrics::{Lyrics, LyricsCandidate, LyricsSearch},
     nav::{Nav, Route, SpotifyUrl},
     playback::{
         NowPlaying, Playable, PlayableMatcher, Playback, PlaybackOrigin, PlaybackPayload,
@@ -57,7 +59,7 @@ pub use crate::data::{
     search::{Search, SearchResults, SearchTopic},
     show::{Episode, EpisodeId, EpisodeLink, Show, ShowDetail, ShowEpisodes, ShowLink},
     slider_scroll_scale::SliderScrollScale,
-    track::{AudioAnalysis, Track, TrackId, TrackLines},
+    track::{sort_tracks, AudioAnalysis, Track, TrackId, TrackLines},
     user::{PublicUser, UserProfile},
     utils::{Cached, Float64, Image, Page},
 };
@@ -86,7 +88,9 @@ pub struct AppState {
     pub alerts: Vector<Alert>,
     pub finder: Finder,
     pub added_queue: Vector<QueueEntry>,
-    pub lyrics: Promise<Vector<TrackLines>>,
+    pub lyrics: Promise<Lyrics>,
+    pub lyrics_search: LyricsSearch,
+    pub lyrics_window_open: bool,
     pub credits: Option<TrackCredits>,
 }
 
@@ -123,6 +127,7 @@ impl AppState {
                 cache_size: Promise::Empty,
                 auth: Authentication::new(),
                 lastfm_auth_result: None,
+                local_files: Default::default(),
             },
             playback,
             added_queue: Vector::new(),
@@ -168,6 +173,8 @@ impl AppState {
             alerts: Vector::new(),
             finder: Finder::new(),
             lyrics: Promise::Empty,
+            lyrics_search: LyricsSearch::default(),
+            lyrics_window_open: false,
             credits: None,
         }
     }
@@ -215,6 +222,22 @@ impl AppState {
     pub fn refresh_playlist(&mut self) {
         self.playlist_detail.tracks = Promise::Empty;
         self.playlist_detail.playlist = Promise::Empty;
+    }
+
+    /// Re-sorts the open playlist and the saved tracks in place, after the
+    /// sort settings change.  No need to load them again.
+    pub fn resort_tracks(&mut self) {
+        let (criteria, order) = (self.config.sort_criteria, self.config.sort_order);
+        if let Some(playlist) = self.playlist_detail.tracks.resolved_mut() {
+            playlist.tracks = sort_tracks(&playlist.tracks, criteria, order);
+        }
+        if self.library.saved_tracks.is_resolved() {
+            self.with_library_mut(|library| {
+                if let Some(saved) = library.saved_tracks.resolved_mut() {
+                    saved.tracks = sort_tracks(&saved.tracks, criteria, order);
+                }
+            });
+        }
     }
 }
 
@@ -351,8 +374,13 @@ pub struct Library {
 }
 
 impl Library {
-    pub fn add_track(&mut self, track: Arc<Track>) {
+    pub fn add_track(&mut self, mut track: Arc<Track>) {
         if let Some(saved) = self.saved_tracks.resolved_mut() {
+            // The newest saved track comes first in "date added" order.
+            for saved_track in saved.tracks.iter_mut() {
+                Arc::make_mut(saved_track).track_pos += 1;
+            }
+            Arc::make_mut(&mut track).track_pos = 0;
             saved.set.insert(track.id);
             saved.tracks.push_front(track);
         }

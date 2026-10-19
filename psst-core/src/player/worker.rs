@@ -117,7 +117,7 @@ impl DecoderSource {
         // Gather the source signal parameters and compute how often we should report
         // the play-head position.
         let signal_spec = decoder.signal_spec();
-        let time_base = decoder.codec_params().time_base.unwrap();
+        let time_base = decoder.time_base();
         let precision = (signal_spec.rate as f64
             * signal_spec.channels.count() as f64
             * REPORT_PRECISION.as_secs_f64()) as u64;

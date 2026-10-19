@@ -2,12 +2,11 @@ use std::fs::File;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use symphonia::core::codecs::CodecType;
+use symphonia::core::codecs::{CodecType, CODEC_TYPE_NULL};
 use symphonia::core::formats::FormatOptions;
 use symphonia::core::io::{MediaSourceStream, MediaSourceStreamOptions};
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::{Hint, Probe};
-use symphonia::default::formats::{MpaReader, OggReader};
 
 use crate::error::Error;
 
@@ -31,10 +30,9 @@ macro_rules! probe_err {
 
 impl TrackProbe {
     pub fn new(path: &PathBuf) -> Result<Self, Error> {
-        // Register all supported file formats for detection.
-        let mut probe = Probe::default();
-        probe.register_all::<MpaReader>();
-        probe.register_all::<OggReader>();
+        // Detect any format Symphonia was built with, local files can be in
+        // formats that Spotify doesn't use.
+        let probe: &Probe = symphonia::default::get_probe();
 
         let mut hint = Hint::new();
         if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
@@ -52,7 +50,9 @@ impl TrackProbe {
             .map_err(|_| probe_err!("failed to probe file"))?;
         let track = probe_result
             .format
-            .default_track()
+            .tracks()
+            .iter()
+            .find(|track| track.codec_params.codec != CODEC_TYPE_NULL)
             .ok_or_else(|| probe_err!("file contained no tracks"))?;
         let params = &track.codec_params;
 

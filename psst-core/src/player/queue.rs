@@ -110,15 +110,17 @@ impl Queue {
         self.items.get(position)
     }
 
+    /// The item that plays after the current one ends, for preloading.
     pub fn get_following(&self) -> Option<&PlaybackItem> {
-        if let Some(position) = self.positions.get(self.position).copied() {
-            if let Some(item) = self.items.get(position) {
-                return Some(item);
-            }
-        } else {
-            return self.user_items.first();
+        // Items added by the user go first.
+        if let Some(item) = self.user_items.get(self.user_items_position) {
+            return Some(item);
         }
-        None
+        if self.items.is_empty() {
+            return None;
+        }
+        let position = self.positions.get(self.following_position()).copied()?;
+        self.items.get(position)
     }
 
     fn previous_position(&self) -> usize {
@@ -145,5 +147,68 @@ impl Queue {
             QueueBehavior::LoopTrack => self.position,
             QueueBehavior::LoopAll => (self.position + 1) % self.items.len(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{audio::normalize::NormalizationLevel, item_id::ItemId};
+
+    fn items(count: u128) -> Vec<PlaybackItem> {
+        (1..=count)
+            .map(|id| PlaybackItem {
+                item_id: ItemId::new(id, crate::item_id::ItemIdType::Track),
+                norm_level: NormalizationLevel::Track,
+            })
+            .collect()
+    }
+
+    fn current(queue: &Queue) -> u128 {
+        queue.get_current().unwrap().item_id.id
+    }
+
+    #[test]
+    fn following_is_the_next_track() {
+        let mut queue = Queue::new();
+        queue.fill(items(5), 2);
+        assert_eq!(current(&queue), 3);
+        assert_eq!(queue.get_following().unwrap().item_id.id, 4);
+        queue.skip_to_following();
+        assert_eq!(current(&queue), 4);
+    }
+
+    #[test]
+    fn shuffle_starts_with_the_clicked_track_and_preloads_the_real_next() {
+        let mut queue = Queue::new();
+        queue.set_behaviour(QueueBehavior::Random);
+        for clicked in 0..10 {
+            queue.fill(items(10), clicked);
+            assert_eq!(current(&queue), clicked as u128 + 1);
+            let following = queue.get_following().unwrap().item_id.id;
+            assert_ne!(following, current(&queue));
+            queue.skip_to_following();
+            assert_eq!(current(&queue), following);
+        }
+    }
+
+    #[test]
+    fn added_tracks_come_next() {
+        let mut queue = Queue::new();
+        queue.fill(items(3), 0);
+        queue.add(items(9)[8]);
+        assert_eq!(queue.get_following().unwrap().item_id.id, 9);
+        queue.skip_to_following();
+        assert_eq!(current(&queue), 9);
+        assert_eq!(queue.get_following().unwrap().item_id.id, 2);
+    }
+
+    #[test]
+    fn loop_track_repeats_and_end_of_queue_stops() {
+        let mut queue = Queue::new();
+        queue.fill(items(2), 1);
+        assert!(queue.get_following().is_none());
+        queue.set_behaviour(QueueBehavior::LoopTrack);
+        assert_eq!(queue.get_following().unwrap().item_id.id, 2);
     }
 }

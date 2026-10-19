@@ -5,19 +5,21 @@ use std::time::Duration;
 use crate::{
     cmd,
     data::{
-        AppState, AudioQuality, Authentication, Config, Preferences, PreferencesTab, Promise,
-        SliderScrollScale, Theme,
+        config::LocalFilesStatus, AppState, AudioQuality, Authentication, Config, Preferences,
+        PreferencesTab, Promise, SliderScrollScale, Theme,
     },
     widget::{icons, Async, Border, Checkbox, MyWidgetExt},
 };
 use druid::{
+    commands,
+    im::Vector,
     text::ParseFormatter,
     widget::{
-        Button, Controller, CrossAxisAlignment, Flex, Label, LineBreaking, MainAxisAlignment,
-        RadioGroup, SizedBox, Slider, TextBox, ViewSwitcher,
+        Button, Controller, CrossAxisAlignment, Either, Flex, Label, LineBreaking, List,
+        MainAxisAlignment, RadioGroup, SizedBox, Slider, TextBox, ViewSwitcher,
     },
-    Color, Data, Env, Event, EventCtx, Insets, Lens, LensExt, LifeCycle, LifeCycleCtx, Selector,
-    Widget, WidgetExt,
+    Color, Data, Env, Event, EventCtx, FileDialogOptions, FileInfo, Insets, Lens, LensExt,
+    LifeCycle, LifeCycleCtx, Selector, Target, Widget, WidgetExt,
 };
 use psst_core::{connection::Credentials, lastfm, oauth, session::SessionConfig};
 
@@ -92,6 +94,7 @@ pub fn preferences_widget() -> impl Widget<AppState> {
                     PreferencesTab::Account => {
                         account_tab_widget(AccountTab::InPreferences).boxed()
                     }
+                    PreferencesTab::LocalFiles => local_files_tab_widget().boxed(),
                     PreferencesTab::Cache => cache_tab_widget().boxed(),
                     PreferencesTab::About => about_tab_widget().boxed(),
                 },
@@ -142,6 +145,12 @@ fn tabs_widget() -> impl Widget<AppState> {
             "Account",
             &icons::ACCOUNT,
             PreferencesTab::Account,
+        ))
+        .with_default_spacer()
+        .with_child(tab_link_widget(
+            "Local Files",
+            &icons::LOCAL_FILE,
+            PreferencesTab::LocalFiles,
         ))
         .with_default_spacer()
         .with_child(tab_link_widget(
@@ -274,6 +283,150 @@ fn general_tab_widget() -> impl Widget<AppState> {
         );
 
     col
+}
+
+const REMOVE_LOCAL_FOLDER: Selector<String> = Selector::new("app.preferences.remove-local-folder");
+
+fn local_files_tab_widget() -> impl Widget<AppState> {
+    let folder_row = || {
+        Flex::row()
+            .cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_flex_child(
+                Label::dynamic(|folder: &String, _| folder.clone())
+                    .with_line_break_mode(LineBreaking::WordWrap)
+                    .expand_width(),
+                1.0,
+            )
+            .with_default_spacer()
+            .with_child(
+                Button::new("Remove").on_click(|ctx, folder: &mut String, _| {
+                    ctx.submit_command(REMOVE_LOCAL_FOLDER.with(folder.clone()));
+                }),
+            )
+            .padding(Insets::uniform_xy(0.0, theme::grid(0.5)))
+    };
+
+    let folders = Either::new(
+        |folders: &Vector<String>, _| folders.is_empty(),
+        Label::new("No folders added yet.").with_text_color(theme::PLACEHOLDER_COLOR),
+        List::new(folder_row),
+    )
+    .lens(AppState::config.then(Config::local_folders));
+
+    let buttons = Flex::row()
+        .with_child(Button::new("Add Folder…").on_click(|ctx, _, _| {
+            let options = FileDialogOptions::new()
+                .select_directories()
+                .multi_selection()
+                .title("Add music folders")
+                .button_text("Add");
+            ctx.submit_command(commands::SHOW_OPEN_PANEL.with(options));
+        }))
+        .with_default_spacer()
+        .with_child(Button::new("Rescan").on_click(|ctx, data: &mut AppState, _| {
+            ctx.submit_command(
+                cmd::RESCAN_LOCAL_FILES
+                    .with(data.config.local_scan_request())
+                    .to(Target::Global),
+            );
+        }));
+
+    let status = Label::dynamic(|status: &LocalFilesStatus, _| {
+        let files = match status.files {
+            1 => "1 audio file indexed".to_string(),
+            n => format!("{n} audio files indexed"),
+        };
+        if status.scanning {
+            format!("{files} — scanning…")
+        } else {
+            files
+        }
+    })
+    .with_text_size(theme::TEXT_SIZE_SMALL)
+    .with_text_color(theme::PLACEHOLDER_COLOR)
+    .lens(AppState::preferences.then(Preferences::local_files));
+
+    Flex::column()
+        .cross_axis_alignment(CrossAxisAlignment::Start)
+        .must_fill_main_axis(true)
+        .with_child(Label::new("Local Files").with_font(theme::UI_FONT_MEDIUM))
+        .with_spacer(theme::grid(1.0))
+        .with_child(
+            Label::new(
+                "Local files in your playlists are played from these folders, including \
+                 their subfolders. Supported formats: MP3, FLAC, M4A, OGG and WAV.",
+            )
+            .with_text_color(theme::PLACEHOLDER_COLOR)
+            .with_line_break_mode(LineBreaking::WordWrap),
+        )
+        .with_spacer(theme::grid(2.0))
+        .with_child(folders)
+        .with_spacer(theme::grid(1.0))
+        .with_child(buttons)
+        .with_spacer(theme::grid(1.0))
+        .with_child(status)
+        .controller(LocalFoldersController)
+}
+
+/// Adds the folders picked in the open panel, removes folders, and re-scans
+/// after every change.
+struct LocalFoldersController;
+
+impl LocalFoldersController {
+    fn changed(ctx: &mut EventCtx, data: &AppState) {
+        ctx.submit_command(
+            cmd::RESCAN_LOCAL_FILES
+                .with(data.config.local_scan_request())
+                .to(Target::Global),
+        );
+    }
+
+    fn add_folders<'a>(data: &mut AppState, paths: impl Iterator<Item = &'a FileInfo>) -> bool {
+        let mut added = false;
+        for info in paths {
+            let folder = info.path().to_string_lossy().into_owned();
+            if !data.config.local_folders.contains(&folder) {
+                data.config.local_folders.push_back(folder);
+                added = true;
+            }
+        }
+        added
+    }
+}
+
+impl<W: Widget<AppState>> Controller<AppState, W> for LocalFoldersController {
+    fn event(
+        &mut self,
+        child: &mut W,
+        ctx: &mut EventCtx,
+        event: &Event,
+        data: &mut AppState,
+        env: &Env,
+    ) {
+        match event {
+            Event::Command(cmd) if cmd.is(commands::OPEN_FILES) => {
+                let files = cmd.get_unchecked(commands::OPEN_FILES);
+                if Self::add_folders(data, files.iter()) {
+                    Self::changed(ctx, data);
+                }
+                ctx.set_handled();
+            }
+            Event::Command(cmd) if cmd.is(commands::OPEN_FILE) => {
+                let file = cmd.get_unchecked(commands::OPEN_FILE);
+                if Self::add_folders(data, std::iter::once(file)) {
+                    Self::changed(ctx, data);
+                }
+                ctx.set_handled();
+            }
+            Event::Command(cmd) if cmd.is(REMOVE_LOCAL_FOLDER) => {
+                let folder = cmd.get_unchecked(REMOVE_LOCAL_FOLDER);
+                data.config.local_folders.retain(|f| f != folder);
+                Self::changed(ctx, data);
+                ctx.set_handled();
+            }
+            _ => child.event(ctx, event, data, env),
+        }
+    }
 }
 
 struct CacheController {
@@ -466,9 +619,52 @@ fn account_tab_widget(tab: AccountTab) -> impl Widget<AppState> {
                         lastfm_disconnected_view().boxed()
                     }
                 },
-            ));
+            ))
+            .with_spacer(theme::grid(3.0))
+            .with_child(discord_widget());
     }
     col.controller(Authenticate::new(tab))
+}
+
+fn discord_widget() -> impl Widget<AppState> {
+    Flex::column()
+        .cross_axis_alignment(CrossAxisAlignment::Start)
+        .with_child(Label::new("Discord").with_font(theme::UI_FONT_MEDIUM))
+        .with_spacer(theme::grid(1.0))
+        .with_child(
+            Label::new(
+                "Show what you're listening to on your Discord profile. Create an application \
+                 in the Discord Developer Portal and paste its Application ID here; its name \
+                 is what Discord shows (e.g. \"Listening to Psst\"). Discord must be open on \
+                 this computer.",
+            )
+            .with_text_color(theme::PLACEHOLDER_COLOR)
+            .with_line_break_mode(LineBreaking::WordWrap),
+        )
+        .with_spacer(theme::grid(2.0))
+        .with_child(make_input_row(
+            "Application ID:",
+            "e.g. 1234567890123456789",
+            AppState::config.then(Config::discord_app_id).map(
+                |id: &Option<String>| id.clone().unwrap_or_default(),
+                |id: &mut Option<String>, value: String| {
+                    let value = value.trim().to_string();
+                    *id = (!value.is_empty()).then_some(value);
+                },
+            ),
+        ))
+        .with_spacer(theme::grid(1.0))
+        .with_child(
+            Flex::row()
+                .with_child(
+                    Checkbox::new("Show on Discord")
+                        .lens(AppState::config.then(Config::discord_presence))
+                        .padding((0.0, 0.0, theme::grid(1.0), 0.0)),
+                )
+                .with_child(Button::new("Create Application").on_click(|_, _, _| {
+                    open::that("https://discord.com/developers/applications").ok();
+                })),
+        )
 }
 
 fn lastfm_connected_view() -> impl Widget<AppState> {

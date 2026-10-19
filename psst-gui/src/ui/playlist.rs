@@ -1,24 +1,21 @@
-use std::{cell::RefCell, cmp::Ordering, rc::Rc, sync::Arc};
+use std::{cell::RefCell, rc::Rc, sync::Arc};
 
 use druid::{
-    im::Vector,
     widget::{Button, Either, Flex, Label, LensWrap, LineBreaking, List, TextBox},
     Insets, Lens, LensExt, LocalizedString, Menu, MenuItem, Selector, Size, UnitPoint, Widget,
     WidgetExt, WindowDesc,
 };
-use itertools::Itertools;
 
 use crate::{
     cmd,
     data::{
-        config::{SortCriteria, SortOrder},
-        AppState, Ctx, Library, Nav, Playlist, PlaylistAddTrack, PlaylistDetail, PlaylistLink,
-        PlaylistRemoveTrack, PlaylistTracks, Track, WithCtx,
+        sort_tracks, AppState, Ctx, Library, Nav, Playlist, PlaylistAddTrack, PlaylistDetail,
+        PlaylistLink, PlaylistRemoveTrack, PlaylistTracks, WithCtx,
     },
     error::Error,
     ui::menu,
     webapi::WebApi,
-    widget::{Async, Empty, MyWidgetExt, RemoteImage, ThemeScope},
+    widget::{icons, Async, Empty, MyWidgetExt, RemoteImage, ThemeScope},
 };
 
 use super::{playable, theme, track, utils};
@@ -48,10 +45,21 @@ pub fn list_widget() -> impl Widget<AppState> {
         utils::spinner_widget,
         || {
             List::new(|| {
-                Label::raw()
+                let pin = Either::new(
+                    |playlist: &WithCtx<Playlist>, _| playlist.data.pinned,
+                    icons::PIN
+                        .scale(theme::ICON_SIZE_TINY)
+                        .padding_right(theme::grid(0.5)),
+                    Empty,
+                );
+                let name = Label::raw()
                     .with_line_break_mode(LineBreaking::WordWrap)
                     .with_text_size(theme::TEXT_SIZE_SMALL)
-                    .lens(Ctx::data().then(Playlist::name))
+                    .lens(Ctx::data().then(Playlist::name));
+                Flex::row()
+                    .cross_axis_alignment(druid::widget::CrossAxisAlignment::Center)
+                    .with_child(pin)
+                    .with_flex_child(name, 1.0)
                     .expand_width()
                     .padding(Insets::uniform_xy(theme::grid(2.0), theme::grid(0.6)))
                     .link()
@@ -510,16 +518,19 @@ fn async_tracks_widget() -> impl Widget<AppState> {
             |arg: (PlaylistLink, AppState)| {
                 let d = arg.0;
                 let data = arg.1;
-                sort_playlist(&data, WebApi::global().get_playlist_tracks(&d.id))
+                // Errors are shown, not turned into an empty (blank) list.
+                WebApi::global().get_playlist_tracks(&d.id).map(|tracks| {
+                    sort_tracks(&tracks, data.config.sort_criteria, data.config.sort_order)
+                })
             },
             |_, data, d| data.playlist_detail.tracks.defer(d.0),
             |_, data, (d, r)| {
-                let tracks = PlaylistTracks {
+                let tracks = r.map(|tracks| PlaylistTracks {
                     id: d.0.id.clone(),
                     name: d.0.name.clone(),
-                    tracks: r,
-                };
-                data.playlist_detail.tracks.update((d.0, Ok(tracks)))
+                    tracks,
+                });
+                data.playlist_detail.tracks.update((d.0, tracks))
             },
         )
 }
@@ -537,38 +548,6 @@ fn tracks_widget() -> impl Widget<WithCtx<PlaylistTracks>> {
         },
         cmd::FIND_IN_PLAYLIST,
     )
-}
-
-fn sort_playlist(data: &AppState, result: Result<Vector<Arc<Track>>, Error>) -> Vector<Arc<Track>> {
-    let sort_criteria = data.config.sort_criteria;
-    let sort_order = data.config.sort_order;
-
-    let playlist = result.unwrap_or_else(|_| Vector::new());
-
-    let sorted_playlist: Vector<Arc<Track>> = playlist
-        .into_iter()
-        .sorted_by(|a, b| {
-            let method = match sort_criteria {
-                SortCriteria::Title => a.name.cmp(&b.name),
-                SortCriteria::Artist => a.artist_name().cmp(&b.artist_name()),
-                SortCriteria::Album => a.album_name().cmp(&b.album_name()),
-                SortCriteria::Duration => a.duration.cmp(&b.duration),
-                SortCriteria::DateAdded => Ordering::Equal,
-            };
-
-            if sort_order == SortOrder::Descending {
-                method.reverse()
-            } else {
-                method
-            }
-        })
-        .collect();
-
-    if sort_criteria == SortCriteria::DateAdded && sort_order == SortOrder::Descending {
-        sorted_playlist.into_iter().rev().collect()
-    } else {
-        sorted_playlist
-    }
 }
 
 fn playlist_menu_ctx(playlist: &WithCtx<Playlist>) -> Menu<AppState> {

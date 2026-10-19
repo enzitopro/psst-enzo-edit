@@ -26,6 +26,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::{
     cmd,
     data::Nav,
+    discord::{DiscordPresence, Presence},
     data::{
         AppState, Config, NowPlaying, Playable, Playback, PlaybackOrigin, PlaybackState,
         QueueBehavior, QueueEntry,
@@ -40,6 +41,7 @@ pub struct PlaybackController {
     media_controls: Option<MediaControls>,
     has_scrobbled: bool,
     scrobbler: Option<Scrobbler>,
+    discord: DiscordPresence,
     startup: bool,
 }
 fn init_scrobbler_instance(data: &AppState) -> Option<Scrobbler> {
@@ -77,6 +79,7 @@ impl PlaybackController {
             media_controls: None,
             has_scrobbled: false,
             scrobbler: None,
+            discord: DiscordPresence::new(),
             startup: true,
         }
     }
@@ -150,6 +153,15 @@ impl PlaybackController {
                 PlayerEvent::Stopped => {
                     event_sink
                         .submit_command(cmd::PLAYBACK_STOPPED, (), widget_id)
+                        .unwrap();
+                }
+                PlayerEvent::LoadingFailed { item, error } => {
+                    event_sink
+                        .submit_command(
+                            cmd::PLAYBACK_SKIPPED,
+                            (item.item_id, error.clone()),
+                            widget_id,
+                        )
                         .unwrap();
                 }
                 _ => {}
@@ -404,7 +416,7 @@ impl PlaybackController {
     }
 
     fn update_lyrics(&mut self, ctx: &mut EventCtx, data: &AppState, now_playing: &NowPlaying) {
-        if matches!(data.nav, Nav::Lyrics) {
+        if matches!(data.nav, Nav::Lyrics) || data.lyrics_window_open {
             ctx.submit_command(lyrics::SHOW_LYRICS.with(now_playing.clone()));
         }
     }
@@ -482,6 +494,15 @@ where
             Event::Command(cmd) if cmd.is(cmd::PLAYBACK_STOPPED) => {
                 data.stop_playback();
                 self.update_media_control_playback(&data.playback);
+                ctx.set_handled();
+            }
+            Event::Command(cmd) if cmd.is(cmd::PLAYBACK_SKIPPED) => {
+                let (item, error) = cmd.get_unchecked(cmd::PLAYBACK_SKIPPED);
+                let name = data
+                    .queued_entry(*item)
+                    .map(|queued| queued.item.name().to_string())
+                    .unwrap_or_else(|| "a track".to_string());
+                data.error_alert(format!("Couldn't play \"{name}\", skipped it: {error}"));
                 ctx.set_handled();
             }
             Event::Command(cmd) if cmd.is(cmd::PLAY_TRACKS) => {
@@ -615,6 +636,7 @@ where
         if self.startup {
             self.startup = false;
             self.scrobbler = init_scrobbler_instance(data);
+            self.discord.configure(data.config.discord_presence_app_id());
         }
         child.lifecycle(ctx, event, data, env);
     }
@@ -638,6 +660,16 @@ where
 
         if lastfm_changed {
             self.scrobbler = init_scrobbler_instance(data);
+        }
+
+        let discord_app_id = data.config.discord_presence_app_id();
+        if old_data.config.discord_presence_app_id() != discord_app_id {
+            self.discord.configure(discord_app_id);
+            self.discord.update(Presence::from_playback(&data.playback));
+        } else if !old_data.playback.same(&data.playback) {
+            // Unchanged presences (e.g. progress ticks) are filtered out by
+            // the Discord thread.
+            self.discord.update(Presence::from_playback(&data.playback));
         }
 
         child.update(ctx, old_data, data, env);

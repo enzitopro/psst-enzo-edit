@@ -5,14 +5,20 @@ mod cmd;
 mod controller;
 mod data;
 mod delegate;
+mod discord;
 mod error;
 mod ui;
 mod webapi;
 mod widget;
 
+use std::{
+    fs::{self, File},
+    io::{self, Write},
+};
+
 use druid::AppLauncher;
 use env_logger::{Builder, Env};
-use webapi::WebApi;
+use webapi::{LocalLibrary, WebApi};
 
 use psst_core::cache::Cache;
 
@@ -24,14 +30,46 @@ use crate::{
 const ENV_LOG: &str = "PSST_LOG";
 const ENV_LOG_STYLE: &str = "PSST_LOG_STYLE";
 
+/// `psst.log` next to the config, started fresh on every launch.  The log of
+/// the previous launch is kept as `psst.old.log`.
+fn open_log_file() -> Option<File> {
+    let dir = Config::config_dir()?;
+    fs::create_dir_all(&dir).ok()?;
+    let path = dir.join("psst.log");
+    let _ = fs::rename(&path, dir.join("psst.old.log"));
+    File::create(path).ok()
+}
+
+/// Writes the log both to stderr and to the log file.
+struct TeeWriter(File);
+
+impl Write for TeeWriter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let _ = io::stderr().write_all(buf);
+        self.0.write_all(buf)?;
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        let _ = io::stderr().flush();
+        self.0.flush()
+    }
+}
+
 fn main() {
     // Setup logging from the env variables, with defaults.
-    Builder::from_env(
+    let mut logger = Builder::from_env(
         Env::new()
             .filter_or(ENV_LOG, "info")
             .write_style(ENV_LOG_STYLE),
-    )
-    .init();
+    );
+    // Lofty warns about every MP3 without a duration header.
+    logger.filter_module("lofty", log::LevelFilter::Error);
+    // Release builds have no console, keep the log in a file as well.
+    if let Some(file) = open_log_file() {
+        logger.target(env_logger::Target::Pipe(Box::new(TeeWriter(file))));
+    }
+    logger.init();
 
     // Load configuration
     let config = Config::load().unwrap_or_default();
@@ -56,6 +94,11 @@ fn main() {
         paginated_limit,
     )
     .install_as_global();
+
+    // Load the local files index saved by the last scan.  The main window
+    // re-scans the configured folders in the background once it opens.
+    LocalLibrary::new(Config::cache_dir()).install_as_global();
+    state.preferences.local_files.files = LocalLibrary::global().file_count();
 
     // Share the core session so the WebApi can authenticate `api-partner`
     // (pathfinder GraphQL) calls with first-party tokens.
@@ -93,9 +136,6 @@ fn main() {
         let window = ui::main_window(&state.config);
         delegate = Delegate::with_main(window.id);
         launcher = AppLauncher::with_window(window).configure_env(ui::theme::setup);
-
-        // Load user's local tracks for the WebApi.
-        WebApi::global().load_local_tracks(state.config.username().unwrap());
     } else {
         // No configured credentials, open the account setup.
         let window = ui::account_setup_window();

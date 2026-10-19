@@ -5,7 +5,10 @@ use itertools::Itertools;
 use psst_core::item_id::{ItemId, ItemIdType};
 use serde::{Deserialize, Serialize};
 
-use crate::data::{AlbumLink, ArtistLink};
+use crate::data::{
+    config::{SortCriteria, SortOrder},
+    AlbumLink, ArtistLink,
+};
 
 #[derive(Clone, Debug, Data, Lens, Deserialize)]
 pub struct Track {
@@ -73,6 +76,118 @@ impl Track {
 
     pub fn url(&self) -> String {
         format!("https://open.spotify.com/track/{}", self.id.0.to_base62())
+    }
+
+    /// A local playlist item that didn't match any file in the local folders.
+    pub fn is_missing_local_file(&self) -> bool {
+        self.is_local && self.local_path.is_none()
+    }
+}
+
+/// Sorts tracks for display.  Text is compared ignoring case and accents, and
+/// ties fall back to the next sensible field (e.g. album, then track number).
+/// `DateAdded` is the order the tracks came in, kept in `track_pos`.
+pub fn sort_tracks(
+    tracks: &Vector<Arc<Track>>,
+    criteria: SortCriteria,
+    order: SortOrder,
+) -> Vector<Arc<Track>> {
+    use crate::webapi::local_library::normalize;
+
+    let position = |t: &Track| (t.disc_number * 1000 + t.track_number) as u64;
+    let mut keyed: Vec<((String, String, u64, usize), Arc<Track>)> = tracks
+        .iter()
+        .map(|track| {
+            let key = match criteria {
+                SortCriteria::Title => (
+                    normalize(&track.name),
+                    normalize(&track.artist_name()),
+                    0,
+                    track.track_pos,
+                ),
+                SortCriteria::Artist => (
+                    normalize(&track.artist_name()),
+                    normalize(&track.album_name()),
+                    position(track),
+                    track.track_pos,
+                ),
+                SortCriteria::Album => (
+                    normalize(&track.album_name()),
+                    normalize(&track.artist_name()),
+                    position(track),
+                    track.track_pos,
+                ),
+                SortCriteria::Duration => (
+                    String::new(),
+                    String::new(),
+                    track.duration.as_millis() as u64,
+                    track.track_pos,
+                ),
+                SortCriteria::DateAdded => (String::new(), String::new(), 0, track.track_pos),
+            };
+            (key, track.clone())
+        })
+        .collect();
+    keyed.sort_by(|(a, _), (b, _)| a.cmp(b));
+    if order == SortOrder::Descending {
+        keyed.reverse();
+    }
+    keyed.into_iter().map(|(_, track)| track).collect()
+}
+
+#[cfg(test)]
+mod sort_tests {
+    use super::*;
+    use crate::webapi::local_library::{local_track, LocalItem};
+
+    fn track(pos: usize, title: &str, artist: &str, album: &str, number: usize) -> Arc<Track> {
+        let item = LocalItem {
+            title: title.into(),
+            artists: vec![artist.into()],
+            album: album.into(),
+            duration_ms: Some(1000 * pos as u64),
+        };
+        let mut track = local_track(&item, None, 1, number);
+        track.track_pos = pos;
+        Arc::new(track)
+    }
+
+    fn titles(tracks: &Vector<Arc<Track>>) -> Vec<&str> {
+        tracks.iter().map(|t| t.name.as_ref()).collect()
+    }
+
+    #[test]
+    fn sorts_ignoring_case_and_accents() {
+        let tracks: Vector<_> = [
+            track(0, "zebra", "B", "X", 1),
+            track(1, "Álbum", "A", "X", 2),
+            track(2, "beyoncé", "C", "X", 3),
+            track(3, "Apple", "D", "X", 4),
+        ]
+        .into_iter()
+        .collect();
+        let sorted = sort_tracks(&tracks, SortCriteria::Title, SortOrder::Ascending);
+        assert_eq!(titles(&sorted), vec!["Álbum", "Apple", "beyoncé", "zebra"]);
+        let sorted = sort_tracks(&tracks, SortCriteria::Title, SortOrder::Descending);
+        assert_eq!(titles(&sorted), vec!["zebra", "beyoncé", "Apple", "Álbum"]);
+    }
+
+    #[test]
+    fn sorts_albums_by_track_number_and_restores_date_added() {
+        let tracks: Vector<_> = [
+            track(0, "Third", "Artist", "Album B", 3),
+            track(1, "First", "Artist", "Album B", 1),
+            track(2, "Other", "Artist", "album a", 7),
+            track(3, "Second", "Artist", "Album B", 2),
+        ]
+        .into_iter()
+        .collect();
+        let by_album = sort_tracks(&tracks, SortCriteria::Album, SortOrder::Ascending);
+        assert_eq!(titles(&by_album), vec!["Other", "First", "Second", "Third"]);
+        let back = sort_tracks(&by_album, SortCriteria::DateAdded, SortOrder::Ascending);
+        assert_eq!(titles(&back), vec!["Third", "First", "Other", "Second"]);
+        let newest = sort_tracks(&by_album, SortCriteria::DateAdded, SortOrder::Descending);
+        assert_eq!(titles(&newest), vec!["Second", "Other", "First", "Third"]);
     }
 }
 

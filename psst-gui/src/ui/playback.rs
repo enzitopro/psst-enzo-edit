@@ -121,7 +121,9 @@ fn playing_item_widget() -> impl Widget<NowPlaying> {
         )
         .with_child(ViewSwitcher::new(
             |now_playing: &NowPlaying, _| {
-                now_playing.item.track().is_some() && now_playing.library.saved_tracks.is_resolved()
+                // Local files can't be saved to the library.
+                now_playing.item.track().is_some_and(|track| !track.is_local)
+                    && now_playing.library.saved_tracks.is_resolved()
             },
             |selector, _data, _env| match selector {
                 true => {
@@ -202,11 +204,18 @@ fn player_widget() -> impl Widget<Playback> {
         .with_default_spacer()
         .with_child(Maybe::or_empty(durations_widget).lens(Playback::now_playing))
         .with_child(
-            small_button_widget(&icons::MUSIC_NOTE)
-                .align_right()
-                .on_left_click(|ctx, _, _, _| {
-                    ctx.submit_command(TOGGLE_LYRICS);
-                }),
+            Flex::row()
+                .with_child(small_button_widget(&icons::MUSIC_NOTE).on_left_click(
+                    |ctx, _, _, _| {
+                        ctx.submit_command(TOGGLE_LYRICS);
+                    },
+                ))
+                .with_child(small_button_widget(&icons::FLOATING_WINDOW).on_left_click(
+                    |ctx, _, _, _| {
+                        ctx.submit_command(cmd::TOGGLE_LYRICS_WINDOW);
+                    },
+                ))
+                .align_right(),
         )
         .padding(theme::grid(2.0))
 }

@@ -2,13 +2,15 @@ use std::{io, time::Duration};
 
 use symphonia::{
     core::{
-        audio::{SampleBuffer, SignalSpec},
-        codecs::{CodecParameters, Decoder, DecoderOptions},
+        audio::{Channels, SampleBuffer, SignalSpec},
+        codecs::{CodecParameters, Decoder, DecoderOptions, CODEC_TYPE_NULL},
         conv::ConvertibleSample,
         errors::Error as SymphoniaError,
         formats::{FormatOptions, FormatReader, SeekMode, SeekTo},
         io::{MediaSource, MediaSourceStream, MediaSourceStreamOptions},
-        units::TimeStamp,
+        meta::MetadataOptions,
+        probe::Hint,
+        units::{TimeBase, TimeStamp},
     },
     default::{
         codecs::{MpaDecoder, VorbisDecoder},
@@ -16,7 +18,11 @@ use symphonia::{
     },
 };
 
-use crate::{error::Error, util::FileWithConstSize};
+use crate::{
+    audio::normalize::{NormalizationData, ReplayGainTags},
+    error::Error,
+    util::FileWithConstSize,
+};
 
 pub enum AudioCodecFormat {
     Mp3,
@@ -58,6 +64,10 @@ pub struct AudioDecoder {
     track_id: u32, // Internal track index.
     decoder: Box<dyn Decoder>,
     format: Box<dyn FormatReader>,
+    // Parameters of the selected track as reported by the container.  Not all
+    // decoders carry every field over into their own parameters.
+    track_params: CodecParameters,
+    spec: SignalSpec,
 }
 
 impl AudioDecoder {
@@ -72,12 +82,107 @@ impl AudioDecoder {
         let format = codec.format_reader(mss)?;
         let track = format.default_track().unwrap();
         let decoder = codec.decoder(&track.codec_params)?;
+        let spec = known_signal_spec(decoder.codec_params(), &track.codec_params).unwrap();
 
         Ok(Self {
             track_id: track.id,
+            track_params: track.codec_params.clone(),
             decoder,
             format,
+            spec,
         })
+    }
+
+    /// Open a file of unknown format, picking the container and codec from all
+    /// the ones Symphonia was built with.  Used for local files.  Also returns
+    /// the ReplayGain data found in the file tags, if there is any.
+    pub fn probe<T>(
+        input: T,
+        extension: Option<&str>,
+    ) -> Result<(Self, Option<NormalizationData>), Error>
+    where
+        T: io::Read + io::Seek + Send + Sync + 'static,
+    {
+        let mss = MediaSourceStream::new(
+            Box::new(FileWithConstSize::new(input)),
+            MediaSourceStreamOptions::default(),
+        );
+        let mut hint = Hint::new();
+        if let Some(ext) = extension {
+            hint.with_extension(ext);
+        }
+        let mut probed = symphonia::default::get_probe().format(
+            &hint,
+            mss,
+            &FormatOptions::default(),
+            &MetadataOptions::default(),
+        )?;
+
+        // Tags can live both in front of the container (ID3v2 before an MP3)
+        // and inside of it (Vorbis comments, MP4 atoms).
+        let mut replay_gain = ReplayGainTags::default();
+        if let Some(metadata) = probed.metadata.get() {
+            if let Some(revision) = metadata.current() {
+                replay_gain.read(revision);
+            }
+        }
+        if let Some(revision) = probed.format.metadata().current() {
+            replay_gain.read(revision);
+        }
+
+        let format = probed.format;
+        // Skip over non-audio tracks, like embedded cover art.
+        let track = format
+            .tracks()
+            .iter()
+            .find(|track| track.codec_params.codec != CODEC_TYPE_NULL)
+            .ok_or(SymphoniaError::Unsupported("file contains no audio track"))?;
+        let decoder = symphonia::default::get_codecs()
+            .make(&track.codec_params, &DecoderOptions::default())?;
+        let track_id = track.id;
+        let track_params = track.codec_params.clone();
+        let spec = known_signal_spec(decoder.codec_params(), &track_params);
+
+        let mut decoder = Self {
+            track_id,
+            track_params,
+            decoder,
+            format,
+            // Replaced below if the container doesn't tell.
+            spec: spec.unwrap_or(SignalSpec {
+                rate: 0,
+                channels: Channels::empty(),
+            }),
+        };
+        if spec.is_none() {
+            decoder.spec = decoder.discover_signal_spec()?;
+        }
+        Ok((decoder, replay_gain.into_normalization_data()))
+    }
+
+    /// Some containers (e.g. AAC in MP4) only reveal the channel layout once
+    /// the first packet is decoded.  Decode it, then start over.
+    fn discover_signal_spec(&mut self) -> Result<SignalSpec, Error> {
+        let spec = loop {
+            let packet = self.format.next_packet()?;
+            if packet.track_id() != self.track_id {
+                continue;
+            }
+            match self.decoder.decode(&packet) {
+                Ok(decoded) => break *decoded.spec(),
+                Err(SymphoniaError::DecodeError(_)) => continue,
+                Err(err) => return Err(err.into()),
+            }
+        };
+        self.format.seek(
+            SeekMode::Accurate,
+            SeekTo::TimeStamp {
+                ts: 0,
+                track_id: self.track_id,
+            },
+        )?;
+        self.decoder.reset();
+        Ok(spec)
     }
 
     pub fn codec_params(&self) -> &CodecParameters {
@@ -85,10 +190,14 @@ impl AudioDecoder {
     }
 
     pub fn signal_spec(&self) -> SignalSpec {
-        SignalSpec {
-            rate: self.codec_params().sample_rate.unwrap(),
-            channels: self.codec_params().channels.unwrap(),
-        }
+        self.spec
+    }
+
+    pub fn time_base(&self) -> TimeBase {
+        self.codec_params()
+            .time_base
+            .or(self.track_params.time_base)
+            .unwrap_or_else(|| TimeBase::new(1, self.signal_spec().rate))
     }
 
     pub fn seek(&mut self, time: Duration) -> Result<TimeStamp, Error> {
@@ -152,6 +261,13 @@ impl AudioDecoder {
             };
         }
     }
+}
+
+fn known_signal_spec(decoder: &CodecParameters, track: &CodecParameters) -> Option<SignalSpec> {
+    Some(SignalSpec {
+        rate: decoder.sample_rate.or(track.sample_rate)?,
+        channels: decoder.channels.or(track.channels)?,
+    })
 }
 
 impl<T> MediaSource for FileWithConstSize<T>

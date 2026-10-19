@@ -1,12 +1,16 @@
+use std::{sync::Arc, time::Duration};
+
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use crossbeam_channel::{bounded, Receiver, Sender};
 use num_traits::Pow;
+use parking_lot::Mutex;
 
 use crate::{
     actor::{Act, Actor, ActorHandle},
     audio::{
         output::{AudioOutput, AudioSink},
-        source::{AudioSource, Empty},
+        resample::ResamplingQuality,
+        source::{AudioSource, Empty, ResampledSource, StereoMappedSource},
     },
     error::Error,
 };
@@ -38,6 +42,8 @@ impl CpalOutput {
             // TODO: Support additional sample formats.
             move |this| Stream::open(device, config, callback_recv, this).unwrap()
         });
+        // Start watching for audio device changes.
+        let _ = handle.send(StreamMsg::CheckDevice);
         let sink = CpalSink {
             channel_count: supported.channels(),
             sample_rate: supported.sample_rate(),
@@ -139,9 +145,27 @@ impl AudioSink for CpalSink {
     }
 }
 
+/// How often to check whether the default output device changed, e.g. after
+/// plugging in headphones.
+const DEVICE_CHECK_INTERVAL: Duration = Duration::from_secs(2);
+
+/// The output stream follows the system's default device: when it changes or
+/// disappears, a new stream is opened on the new default, and playback goes
+/// on there.  The playing source, volume and play state live in `Shared`, so
+/// they carry over to the new stream.
 struct Stream {
     stream: cpal::Stream,
-    _device: cpal::Device,
+    device_name: Option<String>,
+    shared: Arc<Mutex<StreamCallback>>,
+    /// The format the sink advertises, and the decoder side produces.  It
+    /// stays the same for the whole session, other devices get converted.
+    channels: cpal::ChannelCount,
+    sample_rate: cpal::SampleRate,
+    stream_send: Sender<StreamMsg>,
+    playing: bool,
+    /// Bumped with every new stream, so late errors of a replaced stream
+    /// don't trigger another switch.
+    generation: u64,
 }
 
 impl Stream {
@@ -151,30 +175,144 @@ impl Stream {
         callback_recv: Receiver<CallbackMsg>,
         stream_send: Sender<StreamMsg>,
     ) -> Result<Self, Error> {
-        let mut callback = StreamCallback {
+        let shared = Arc::new(Mutex::new(StreamCallback {
             callback_recv,
-            stream_send,
             source: Box::new(Empty),
             volume: 1.0, // We start with the full volume.
             state: CallbackState::Paused,
-        };
-
+        }));
+        let device_name = device.name().ok();
         log::info!("opening output stream: {config:?}");
-        let stream = device.build_output_stream(
+        let stream = Self::build_stream(
+            &device,
             &config,
-            move |output, _| {
-                callback.write_samples(output);
-            },
-            |err| {
-                log::error!("audio output error: {err}");
-            },
-            None,
+            &shared,
+            config.channels,
+            config.sample_rate,
+            &stream_send,
+            0,
         )?;
-
         Ok(Self {
-            _device: device,
             stream,
+            device_name,
+            shared,
+            channels: config.channels,
+            sample_rate: config.sample_rate,
+            stream_send,
+            playing: false,
+            generation: 0,
         })
+    }
+
+    fn build_stream(
+        device: &cpal::Device,
+        config: &cpal::StreamConfig,
+        shared: &Arc<Mutex<StreamCallback>>,
+        channels: cpal::ChannelCount,
+        sample_rate: cpal::SampleRate,
+        stream_send: &Sender<StreamMsg>,
+        generation: u64,
+    ) -> Result<cpal::Stream, Error> {
+        let error_send = stream_send.clone();
+        let on_error = move |err: cpal::StreamError| {
+            log::error!("audio output error: {err}");
+            if matches!(err, cpal::StreamError::DeviceNotAvailable) {
+                let _ = error_send.try_send(StreamMsg::DeviceLost(generation));
+            }
+        };
+        let stream = if config.channels == channels && config.sample_rate == sample_rate {
+            let shared = Arc::clone(shared);
+            device.build_output_stream(
+                config,
+                move |output: &mut [f32], _| shared.lock().write_samples(output),
+                on_error,
+                None,
+            )?
+        } else {
+            // The device wants another format than the one the playback was
+            // set up for, convert on the fly.
+            log::info!(
+                "converting audio from {} Hz, {} ch to {} Hz, {} ch",
+                sample_rate.0,
+                channels,
+                config.sample_rate.0,
+                config.channels
+            );
+            let reader = SharedSource {
+                shared: Arc::clone(shared),
+                channels: channels as usize,
+                sample_rate: sample_rate.0,
+            };
+            let resampled = ResampledSource::new(
+                reader,
+                config.sample_rate.0,
+                ResamplingQuality::SincMediumQuality,
+            );
+            let mut converted: Box<dyn AudioSource> = if config.channels != channels {
+                Box::new(StereoMappedSource::new(resampled, config.channels as usize))
+            } else {
+                Box::new(resampled)
+            };
+            device.build_output_stream(
+                config,
+                move |output: &mut [f32], _| {
+                    let written = converted.write(output);
+                    output[written..].iter_mut().for_each(|s| *s = 0.0);
+                },
+                on_error,
+                None,
+            )?
+        };
+        Ok(stream)
+    }
+
+    /// Moves playback to the current default device, if it's another one than
+    /// we're using, or if ours is gone (`lost`).
+    fn follow_default_device(&mut self, lost: bool) {
+        let Some(device) = cpal::default_host().default_output_device() else {
+            if lost {
+                log::warn!("no audio output device available");
+            }
+            return;
+        };
+        let name = device.name().ok();
+        if !lost && name == self.device_name {
+            return;
+        }
+        log::info!("switching audio output to {name:?}");
+        // Keep the old stream from pulling samples meanwhile.
+        let _ = self.stream.pause();
+        let generation = self.generation + 1;
+        let result = CpalOutput::preferred_output_config(&device).and_then(|supported| {
+            Self::build_stream(
+                &device,
+                &supported.config(),
+                &self.shared,
+                self.channels,
+                self.sample_rate,
+                &self.stream_send,
+                generation,
+            )
+        });
+        match result {
+            Ok(stream) => {
+                if self.playing {
+                    if let Err(err) = stream.play() {
+                        log::error!("failed to start stream: {err}");
+                    }
+                }
+                self.stream = stream;
+                self.device_name = name;
+                self.generation = generation;
+            }
+            Err(err) => {
+                // Try again on the next check.
+                log::error!("failed to open audio device {name:?}: {err}");
+                if self.playing && !lost {
+                    let _ = self.stream.play();
+                }
+            }
+        }
     }
 }
 
@@ -186,24 +324,33 @@ impl Actor for Stream {
         match msg {
             StreamMsg::Pause => {
                 log::debug!("pausing audio output stream");
+                self.playing = false;
                 if let Err(err) = self.stream.pause() {
                     log::error!("failed to stop stream: {err}");
                 }
-                Ok(Act::Continue)
             }
             StreamMsg::Resume => {
                 log::debug!("resuming audio output stream");
+                self.playing = true;
                 if let Err(err) = self.stream.play() {
                     log::error!("failed to start stream: {err}");
                 }
-                Ok(Act::Continue)
             }
             StreamMsg::Close => {
                 log::debug!("closing audio output stream");
                 let _ = self.stream.pause();
-                Ok(Act::Shutdown)
+                return Ok(Act::Shutdown);
             }
+            StreamMsg::DeviceLost(generation) if generation == self.generation => {
+                self.follow_default_device(true)
+            }
+            StreamMsg::DeviceLost(_) => {}
+            StreamMsg::CheckDevice => self.follow_default_device(false),
         }
+        Ok(Act::WaitOr {
+            timeout: DEVICE_CHECK_INTERVAL,
+            timeout_msg: StreamMsg::CheckDevice,
+        })
     }
 }
 
@@ -211,6 +358,32 @@ enum StreamMsg {
     Pause,
     Resume,
     Close,
+    /// The device of the stream of this generation went away.
+    DeviceLost(u64),
+    /// Periodic check for a new default device.
+    CheckDevice,
+}
+
+/// Reads from the shared callback state, for streams that need conversion.
+struct SharedSource {
+    shared: Arc<Mutex<StreamCallback>>,
+    channels: usize,
+    sample_rate: u32,
+}
+
+impl AudioSource for SharedSource {
+    fn write(&mut self, output: &mut [f32]) -> usize {
+        self.shared.lock().write_samples(output);
+        output.len()
+    }
+
+    fn channel_count(&self) -> usize {
+        self.channels
+    }
+
+    fn sample_rate(&self) -> u32 {
+        self.sample_rate
+    }
 }
 
 enum CallbackMsg {
@@ -226,8 +399,6 @@ enum CallbackState {
 }
 
 struct StreamCallback {
-    #[allow(unused)]
-    stream_send: Sender<StreamMsg>,
     callback_recv: Receiver<CallbackMsg>,
     source: Box<dyn AudioSource>,
     state: CallbackState,

@@ -19,55 +19,31 @@ where
         data: &mut AppState,
         env: &Env,
     ) {
-        match event {
+        let criteria = match event {
             Event::Command(cmd) if cmd.is(cmd::TOGGLE_SORT_ORDER) => {
-                if data.config.sort_order == SortOrder::Ascending {
-                    data.config.sort_order = SortOrder::Descending;
-                } else {
-                    data.config.sort_order = SortOrder::Ascending;
-                }
-
-                ctx.submit_command(cmd::NAVIGATE_REFRESH);
+                data.config.sort_order = match data.config.sort_order {
+                    SortOrder::Ascending => SortOrder::Descending,
+                    SortOrder::Descending => SortOrder::Ascending,
+                };
+                data.resort_tracks();
                 ctx.set_handled();
+                return;
             }
-            Event::Command(cmd) if cmd.is(cmd::SORT_BY_TITLE) => {
-                if data.config.sort_criteria != SortCriteria::Title {
-                    data.config.sort_criteria = SortCriteria::Title;
-                    ctx.submit_command(cmd::NAVIGATE_REFRESH);
-                    ctx.set_handled();
-                }
-            }
-            Event::Command(cmd) if cmd.is(cmd::SORT_BY_ALBUM) => {
-                if data.config.sort_criteria != SortCriteria::Album {
-                    data.config.sort_criteria = SortCriteria::Album;
-                    ctx.submit_command(cmd::NAVIGATE_REFRESH);
-                    ctx.set_handled();
-                }
-            }
-            Event::Command(cmd) if cmd.is(cmd::SORT_BY_DATE_ADDED) => {
-                if data.config.sort_criteria != SortCriteria::DateAdded {
-                    data.config.sort_criteria = SortCriteria::DateAdded;
-                    ctx.submit_command(cmd::NAVIGATE_REFRESH);
-                    ctx.set_handled();
-                }
-            }
-            Event::Command(cmd) if cmd.is(cmd::SORT_BY_ARTIST) => {
-                if data.config.sort_criteria != SortCriteria::Artist {
-                    data.config.sort_criteria = SortCriteria::Artist;
-                    ctx.submit_command(cmd::NAVIGATE_REFRESH);
-                    ctx.set_handled();
-                }
-            }
-            Event::Command(cmd) if cmd.is(cmd::SORT_BY_DURATION) => {
-                if data.config.sort_criteria != SortCriteria::Duration {
-                    data.config.sort_criteria = SortCriteria::Duration;
-                    ctx.submit_command(cmd::NAVIGATE_REFRESH);
-                    ctx.set_handled();
-                }
-            }
+            Event::Command(cmd) if cmd.is(cmd::SORT_BY_TITLE) => SortCriteria::Title,
+            Event::Command(cmd) if cmd.is(cmd::SORT_BY_ALBUM) => SortCriteria::Album,
+            Event::Command(cmd) if cmd.is(cmd::SORT_BY_DATE_ADDED) => SortCriteria::DateAdded,
+            Event::Command(cmd) if cmd.is(cmd::SORT_BY_ARTIST) => SortCriteria::Artist,
+            Event::Command(cmd) if cmd.is(cmd::SORT_BY_DURATION) => SortCriteria::Duration,
             _ => {
                 child.event(ctx, event, data, env);
+                return;
             }
+        };
+        if data.config.sort_criteria != criteria {
+            data.config.sort_criteria = criteria;
+            // Sorted in place, the tracks are already loaded.
+            data.resort_tracks();
         }
+        ctx.set_handled();
     }
 }

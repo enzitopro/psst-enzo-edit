@@ -53,6 +53,8 @@ impl AudioFormat {
         }
     }
 
+    /// Only meaningful for remote files.  Local files are always decoded by
+    /// probing, so formats without a variant here still play.
     pub fn from_codec(codec: CodecType) -> Self {
         use symphonia::core::codecs::*;
         if codec == CODEC_TYPE_MP3 {
@@ -172,12 +174,16 @@ impl MediaFile {
         Ok((decoded, normalization))
     }
 
-    pub fn local_audio_source(&self) -> Result<(AudioDecoder, NormalizationData), Error> {
-        let mut reader = fs::File::open(self.path().item_id.to_local())?;
-        let normalization = NormalizationData::parse(&mut reader)?;
-        let encoded = OffsetFile::new(reader, self.header_length())?;
-        let decoded = AudioDecoder::new(encoded, self.codec_format())?;
-        Ok((decoded, normalization))
+    /// Local files are plain, unencrypted audio files of any supported format,
+    /// without the Spotify header.  Normalization data comes from ReplayGain
+    /// tags, if the file has them.
+    pub fn local_audio_source(
+        &self,
+    ) -> Result<(AudioDecoder, Option<NormalizationData>), Error> {
+        let file_path = self.path().item_id.to_local();
+        let reader = fs::File::open(&file_path)?;
+        let extension = file_path.extension().and_then(|ext| ext.to_str());
+        AudioDecoder::probe(reader, extension)
     }
 
     fn header_length(&self) -> u64 {

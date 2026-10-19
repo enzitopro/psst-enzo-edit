@@ -50,10 +50,13 @@ impl PlaybackItem {
                 let key = load_audio_key(&path, session, &cache)?;
                 let file = MediaFile::open(path, cdn, cache)?;
                 let (source, norm_data) = file.remote_audio_source(key)?;
-                (file, source, norm_data)
+                (file, source, Some(norm_data))
             }
         };
-        let norm_factor = norm_data.factor_for_level(self.norm_level, config.pregain);
+        // Local files without ReplayGain tags play at their original level.
+        let norm_factor = norm_data.map_or(1.0, |norm_data| {
+            norm_data.factor_for_level(self.norm_level, config.pregain)
+        });
         Ok(LoadedPlaybackItem {
             file,
             source,
@@ -137,7 +140,7 @@ fn load_media_path_from_episode(
 }
 
 fn load_media_path_from_local(item_id: ItemId) -> Result<MediaPath, Error> {
-    let path = LocalItemRegistry::get(item_id.id).expect("valid local item ID");
+    let path = LocalItemRegistry::get(item_id.id).ok_or(Error::MediaFileNotFound)?;
     let probe = TrackProbe::new(&path)?;
     Ok(MediaPath {
         item_id,

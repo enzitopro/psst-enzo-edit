@@ -1,14 +1,12 @@
-use std::sync::Arc;
+use std::{path::Path, sync::Arc};
 
 use druid::{
+    commands,
     widget::{CrossAxisAlignment, Either, Flex, Label, LineBreaking, ViewSwitcher},
-    Env, Lens, LensExt, LocalizedString, Menu, MenuItem, Size, TextAlignment, Widget, WidgetExt,
+    Command, Env, Lens, LensExt, LocalizedString, Menu, MenuItem, Size, TextAlignment, Widget,
+    WidgetExt,
 };
-use psst_core::{
-    audio::normalize::NormalizationLevel,
-    item_id::{ItemId, ItemIdType},
-    player::item::PlaybackItem,
-};
+use psst_core::{audio::normalize::NormalizationLevel, player::item::PlaybackItem};
 
 use crate::{
     cmd,
@@ -50,7 +48,7 @@ impl Display {
     }
 }
 
-pub fn playable_widget(track: &Track, display: Display) -> impl Widget<PlayRow<Arc<Track>>> {
+pub fn playable_widget(display: Display) -> impl Widget<PlayRow<Arc<Track>>> {
     let mut main_row = Flex::row();
     let mut major = Flex::row().cross_axis_alignment(CrossAxisAlignment::Center);
     let mut minor = Flex::row();
@@ -83,6 +81,14 @@ pub fn playable_widget(track: &Track, display: Display) -> impl Widget<PlayRow<A
     }
 
     if display.title {
+        let local_icon = Either::new(
+            |row: &PlayRow<Arc<Track>>, _| row.item.is_local,
+            icons::LOCAL_FILE
+                .scale(theme::ICON_SIZE_SMALL)
+                .padding_right(theme::grid(0.5)),
+            Empty,
+        );
+        major.add_child(local_icon);
         let track_name = Label::raw()
             .with_font(theme::UI_FONT_MEDIUM)
             .with_line_break_mode(LineBreaking::Clip)
@@ -93,10 +99,15 @@ pub fn playable_widget(track: &Track, display: Display) -> impl Widget<PlayRow<A
     }
 
     let mut minor_row = Flex::row();
-    if track.explicit && (display.artist || display.album) {
-        let icon = icons::EXPLICIT.scale(theme::ICON_SIZE_TINY);
-        minor_row.add_child(icon);
-        minor_row.add_spacer(theme::grid(0.5));
+    if display.artist || display.album {
+        // Decided per row data, rows get reused for other tracks on sorting.
+        minor_row.add_child(Either::new(
+            |row: &PlayRow<Arc<Track>>, _| row.item.explicit,
+            icons::EXPLICIT
+                .scale(theme::ICON_SIZE_TINY)
+                .padding_right(theme::grid(0.5)),
+            Empty,
+        ));
     }
     let minor_label = Label::dynamic(move |row: &PlayRow<Arc<Track>>, _| {
         let artist = if display.artist {
@@ -111,10 +122,15 @@ pub fn playable_widget(track: &Track, display: Display) -> impl Widget<PlayRow<A
         } else {
             String::new()
         };
-        if !artist.is_empty() && !album.is_empty() {
+        let text = if !artist.is_empty() && !album.is_empty() {
             format!("{artist} • {album}")
         } else {
             format!("{artist}{album}")
+        };
+        if row.item.is_missing_local_file() {
+            format!("Not found in local folders • {text}")
+        } else {
+            text
         }
     })
     .with_line_break_mode(LineBreaking::Clip)
@@ -169,6 +185,12 @@ pub fn playable_widget(track: &Track, display: Display) -> impl Widget<PlayRow<A
             false => Box::new(Flex::column()),
         },
     );
+    // Local files can't be saved to the library.
+    let saved = Either::new(
+        |row: &PlayRow<Arc<Track>>, _| row.item.is_local,
+        Empty,
+        saved,
+    );
 
     main_row
         .with_flex_child(
@@ -178,12 +200,22 @@ pub fn playable_widget(track: &Track, display: Display) -> impl Widget<PlayRow<A
                 .with_spacer(2.0)
                 .with_child(minor)
                 .on_left_click(|ctx, _, row, _| {
-                    ctx.submit_notification(cmd::PLAY.with(row.position))
+                    if !row.item.is_missing_local_file() {
+                        ctx.submit_notification(cmd::PLAY.with(row.position))
+                    }
                 }),
             1.0,
         )
         .with_default_spacer()
         .with_child(saved.center())
+        .env_scope(|env, row: &PlayRow<Arc<Track>>| {
+            // Grey out local items that aren't in the local folders.
+            if row.item.is_missing_local_file() {
+                env.set(theme::TEXT_COLOR, env.get(theme::GREY_400));
+                env.set(theme::PLACEHOLDER_COLOR, env.get(theme::GREY_400));
+                env.set(theme::ICON_COLOR, env.get(theme::GREY_500));
+            }
+        })
         .padding(theme::grid(1.0))
         .link()
         .active(|row: &PlayRow<Arc<Track>>, _env: &Env| {
@@ -240,6 +272,10 @@ pub fn track_menu(
     library: &Library,
     origin: &PlaybackOrigin,
 ) -> Menu<AppState> {
+    if track.is_local {
+        return local_track_menu(track, origin);
+    }
+
     let mut menu = Menu::empty();
 
     for artist_link in &track.artists {
@@ -357,16 +393,7 @@ pub fn track_menu(
             LocalizedString::new("menu-item-add-to-queue").with_placeholder("Add Track to Queue"),
         )
         // PlayerCommand
-        .command(cmd::ADD_TO_QUEUE.with((
-            QueueEntry {
-                item: crate::ui::Playable::Track(track.clone()),
-                origin: origin.clone(),
-            },
-            PlaybackItem {
-                item_id: ItemId::from_base62(&String::from(track.id), ItemIdType::Track).unwrap(),
-                norm_level: NormalizationLevel::Track,
-            },
-        ))),
+        .command(add_to_queue_command(track, origin)),
     );
 
     let mut playlist_menu = Menu::new(
@@ -385,6 +412,65 @@ pub fn track_menu(
         );
     }
     menu = menu.entry(playlist_menu);
+
+    menu
+}
+
+fn add_to_queue_command(track: &Arc<Track>, origin: &PlaybackOrigin) -> Command {
+    cmd::ADD_TO_QUEUE.with((
+        QueueEntry {
+            item: crate::ui::Playable::Track(track.clone()),
+            origin: origin.clone(),
+        },
+        PlaybackItem {
+            // Keep the ID type, local files are not Spotify tracks.
+            item_id: track.id.0,
+            norm_level: NormalizationLevel::Track,
+        },
+    ))
+}
+
+/// Local files have no Spotify ID, so everything that goes through the Web API
+/// (library, credits, recommendations, links, playlists) is left out.
+fn local_track_menu(track: &Arc<Track>, origin: &PlaybackOrigin) -> Menu<AppState> {
+    let mut menu = Menu::empty();
+
+    match &track.local_path {
+        Some(path) => {
+            menu = menu.entry(
+                MenuItem::new(
+                    LocalizedString::new("menu-item-add-to-queue")
+                        .with_placeholder("Add Track to Queue"),
+                )
+                .command(add_to_queue_command(track, origin)),
+            );
+            menu = menu.separator();
+            if let Some(folder) = Path::new(path.as_ref()).parent() {
+                menu = menu.entry(
+                    MenuItem::new(
+                        LocalizedString::new("menu-item-show-in-folder")
+                            .with_placeholder("Show File in Folder"),
+                    )
+                    .command(cmd::GO_TO_URL.with(folder.to_string_lossy().into_owned())),
+                );
+            }
+            menu = menu.entry(
+                MenuItem::new(
+                    LocalizedString::new("menu-item-copy-path").with_placeholder("Copy File Path"),
+                )
+                .command(cmd::COPY.with(path.to_string())),
+            );
+        }
+        None => {
+            menu = menu.entry(
+                MenuItem::new(
+                    LocalizedString::new("menu-item-local-files-preferences")
+                        .with_placeholder("Not Found — Set Up Local Folders…"),
+                )
+                .command(commands::SHOW_PREFERENCES),
+            );
+        }
+    }
 
     menu
 }

@@ -8,7 +8,7 @@ use std::{
 #[cfg(target_family = "unix")]
 use std::os::unix::fs::OpenOptionsExt;
 
-use druid::{Data, Lens, Size};
+use druid::{im::Vector, Data, Lens, Size};
 use platform_dirs::AppDirs;
 use psst_core::{
     cache::{mkdir_if_not_exists, CacheHandle},
@@ -30,6 +30,21 @@ pub struct Preferences {
     pub cache_size: Promise<u64, (), ()>,
     pub auth: Authentication,
     pub lastfm_auth_result: Option<String>,
+    pub local_files: LocalFilesStatus,
+}
+
+#[derive(Clone, Debug, Default, Data, Lens)]
+pub struct LocalFilesStatus {
+    pub scanning: bool,
+    pub files: usize,
+}
+
+/// What to index for local playback: the configured folders, plus the files
+/// known to the official desktop client of `username`.
+#[derive(Clone, Debug)]
+pub struct LocalScanRequest {
+    pub folders: Vec<PathBuf>,
+    pub username: Option<String>,
 }
 
 impl Preferences {
@@ -49,6 +64,7 @@ impl Preferences {
 pub enum PreferencesTab {
     General,
     Account,
+    LocalFiles,
     Cache,
     About,
 }
@@ -133,6 +149,12 @@ pub struct Config {
     /// Cached Web API OAuth token (access + refresh + expiry).
     #[data(ignore)]
     webapi_token: Option<WebApiToken>,
+    /// Folders scanned for the local files in playlists.
+    pub local_folders: Vector<String>,
+    /// Show the playing track on Discord, through the user's own Discord
+    /// application (its name is what Discord shows).
+    pub discord_presence: bool,
+    pub discord_app_id: Option<String>,
 }
 
 impl Default for Config {
@@ -157,6 +179,9 @@ impl Default for Config {
             lastfm_enable: false,
             webapi_client_id: None,
             webapi_token: None,
+            local_folders: Vector::new(),
+            discord_presence: false,
+            discord_app_id: None,
         }
     }
 }
@@ -282,6 +307,22 @@ impl Config {
         }
 
         Err("No valid Web API token available. Browser-based authentication required.".to_string())
+    }
+
+    /// The Discord application to show the presence with, if it's turned on.
+    pub fn discord_presence_app_id(&self) -> Option<String> {
+        self.discord_app_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|id| self.discord_presence && !id.is_empty())
+            .map(String::from)
+    }
+
+    pub fn local_scan_request(&self) -> LocalScanRequest {
+        LocalScanRequest {
+            folders: self.local_folders.iter().map(PathBuf::from).collect(),
+            username: self.username().map(String::from),
+        }
     }
 
     pub fn playback(&self) -> PlaybackConfig {

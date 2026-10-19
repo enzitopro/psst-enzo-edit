@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::{
-    data::{Nav, PlaybackPayload, QueueBehavior, QueueEntry},
+    data::{config::LocalScanRequest, Nav, PlaybackPayload, QueueBehavior, QueueEntry},
     ui::find::Find,
 };
 
@@ -35,6 +35,7 @@ pub const NAVIGATE: Selector<Nav> = Selector::new("app.navigates");
 pub const NAVIGATE_BACK: Selector<usize> = Selector::new("app.navigate-back");
 pub const NAVIGATE_REFRESH: Selector = Selector::new("app.navigate-refresh");
 pub const TOGGLE_LYRICS: Selector = Selector::new("app.toggle-lyrics");
+pub const TOGGLE_LYRICS_WINDOW: Selector = Selector::new("app.toggle-lyrics-window");
 
 // Playback state
 pub const PLAYBACK_LOADING: Selector<ItemId> = Selector::new("app.playback-loading");
@@ -44,6 +45,8 @@ pub const PLAYBACK_PAUSING: Selector = Selector::new("app.playback-pausing");
 pub const PLAYBACK_RESUMING: Selector = Selector::new("app.playback-resuming");
 pub const PLAYBACK_BLOCKED: Selector = Selector::new("app.playback-blocked");
 pub const PLAYBACK_STOPPED: Selector = Selector::new("app.playback-stopped");
+/// A track failed to load and was skipped, with the reason.
+pub const PLAYBACK_SKIPPED: Selector<(ItemId, String)> = Selector::new("app.playback-skipped");
 
 // Playback control
 pub const PLAY: Selector<usize> = Selector::new("app.play-index");
@@ -74,3 +77,7 @@ pub const LOAD_TRACK_CREDITS: Selector<Arc<Track>> = Selector::new("app.credits-
 
 // Artwork
 pub const SHOW_ARTWORK: Selector = Selector::new("app.show-artwork");
+
+// Local files
+pub const RESCAN_LOCAL_FILES: Selector<LocalScanRequest> =
+    Selector::new("app.local-files.rescan");

@@ -51,6 +51,13 @@ symphonia = { version = "0.5.4", default-features = false, features = [
   "ogg",
   "vorbis",
   "mp3",
+  # Local files.
+  "flac",
+  "isomp4",
+  "aac",
+  "alac",
+  "wav",
+  "pcm",
 ] }
 
 [target.'cfg(target_os = "windows")'.dependencies]

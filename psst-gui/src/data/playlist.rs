@@ -43,6 +43,9 @@ pub struct Playlist {
     pub collaborative: bool,
     #[serde(rename = "public")]
     pub public: Option<bool>,
+    /// Pinned to the top of the library in the official client.
+    #[serde(default)]
+    pub pinned: bool,
 }
 
 impl Playlist {

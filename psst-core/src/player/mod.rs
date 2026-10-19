@@ -25,6 +25,7 @@ use self::{
 
 const PREVIOUS_TRACK_THRESHOLD: Duration = Duration::from_secs(3);
 const STOP_AFTER_CONSECUTIVE_LOADING_FAILURES: usize = 3;
+const RETRY_LOADING_AFTER: Duration = Duration::from_secs(1);
 
 #[derive(Clone)]
 pub struct PlaybackConfig {
@@ -54,6 +55,8 @@ pub struct Player {
     audio_output_sink: DefaultAudioSink,
     playback_mgr: PlaybackManager,
     consecutive_loading_failures: usize,
+    /// The item that failed to load once and is being retried.
+    retried_item: Option<PlaybackItem>,
 }
 
 impl Player {
@@ -78,6 +81,7 @@ impl Player {
             preload: PreloadState::None,
             queue: Queue::new(),
             consecutive_loading_failures: 0,
+            retried_item: None,
         }
     }
 
@@ -97,6 +101,7 @@ impl Player {
             PlayerEvent::Position { position, path } => self.handle_position(position, path),
             PlayerEvent::EndOfTrack => self.handle_end_of_track(),
             PlayerEvent::Loading { .. }
+            | PlayerEvent::LoadingFailed { .. }
             | PlayerEvent::Playing { .. }
             | PlayerEvent::Pausing { .. }
             | PlayerEvent::Resuming { .. }
@@ -132,10 +137,30 @@ impl Player {
             } if item == requested_item => match result {
                 Ok(loaded_item) => {
                     self.consecutive_loading_failures = 0;
+                    self.retried_item = None;
                     self.play_loaded(loaded_item);
                 }
+                // Most loading errors are hiccups (audio key or CDN timeouts), give
+                // them a second chance before skipping the track.  A missing file
+                // won't appear on a retry.
+                Err(err)
+                    if self.retried_item != Some(item)
+                        && !matches!(err, Error::MediaFileNotFound) =>
+                {
+                    log::warn!("error while loading, retrying: {err}");
+                    self.retried_item = Some(item);
+                    self.state = PlayerState::Loading {
+                        item,
+                        _loading_handle: self.spawn_load(item, RETRY_LOADING_AFTER),
+                    };
+                }
                 Err(err) => {
+                    self.retried_item = None;
                     self.consecutive_loading_failures += 1;
+                    let _ = self.sender.send(PlayerEvent::LoadingFailed {
+                        item,
+                        error: err.to_string(),
+                    });
                     if self.consecutive_loading_failures < STOP_AFTER_CONSECUTIVE_LOADING_FAILURES {
                         log::error!("skipping, error while loading: {err}");
                         self.next();
@@ -196,6 +221,17 @@ impl Player {
     }
 
     fn handle_end_of_track(&mut self) {
+        if let PlayerState::Playing { path, position } = &self.state {
+            // A track "ending" right away usually means its audio stream broke,
+            // which looks like a skip.  Leave a trace for diagnosing it.
+            if *position < Duration::from_secs(2) && path.duration > Duration::from_secs(10) {
+                log::warn!(
+                    "track {:?} ended after {position:?} of {:?}, its audio stream probably failed",
+                    path.item_id,
+                    path.duration
+                );
+            }
+        }
         self.queue.skip_to_following();
         if let Some(&item) = self.queue.get_current() {
             self.load_and_play(item);
@@ -240,17 +276,7 @@ impl Player {
             preloading_other_file_or_none => {
                 self.preload = preloading_other_file_or_none;
                 // Item is not preloaded yet, load it in a background thread.
-                thread::spawn({
-                    let sender = self.sender.clone();
-                    let session = self.session.clone();
-                    let cdn = self.cdn.clone();
-                    let cache = self.cache.clone();
-                    let config = self.config.clone();
-                    move || {
-                        let result = item.load(&session, cdn, cache, &config);
-                        sender.send(PlayerEvent::Loaded { item, result }).unwrap();
-                    }
-                })
+                self.spawn_load(item, Duration::ZERO)
             }
         };
 
@@ -259,6 +285,23 @@ impl Player {
             item,
             _loading_handle: loading_handle,
         };
+    }
+
+    /// Loads `item` in a background thread, after `delay`, and reports back
+    /// with `PlayerEvent::Loaded`.
+    fn spawn_load(&self, item: PlaybackItem, delay: Duration) -> JoinHandle<()> {
+        let sender = self.sender.clone();
+        let session = self.session.clone();
+        let cdn = self.cdn.clone();
+        let cache = self.cache.clone();
+        let config = self.config.clone();
+        thread::spawn(move || {
+            if !delay.is_zero() {
+                thread::sleep(delay);
+            }
+            let result = item.load(&session, cdn, cache, &config);
+            let _ = sender.send(PlayerEvent::Loaded { item, result });
+        })
     }
 
     fn preload(&mut self, item: PlaybackItem) {
@@ -443,6 +486,11 @@ pub enum PlayerEvent {
     Loaded {
         item: PlaybackItem,
         result: Result<LoadedPlaybackItem, Error>,
+    },
+    /// Track couldn't be loaded, even after a retry, and gets skipped.
+    LoadingFailed {
+        item: PlaybackItem,
+        error: String,
     },
     /// Next item in queue has been either successfully preloaded or failed to
     /// preload.

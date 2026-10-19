@@ -26,7 +26,7 @@ use psst_core::{
     },
     system_info::{OS, SPOTIFY_SEMANTIC_VERSION},
 };
-use serde::{de::DeserializeOwned, Deserialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::json;
 use std::sync::OnceLock;
 use time::{Date, Month};
@@ -47,13 +47,12 @@ use crate::{
     ui::credits::TrackCredits,
 };
 
-use super::{cache::WebApiCache, local::LocalTrackManager};
+use super::{cache::WebApiCache, local_library::LocalLibrary, pathfinder};
 use sanitize_html::{rules::predefined::DEFAULT, sanitize_str};
 
 pub struct WebApi {
     agent: Agent,
     cache: WebApiCache,
-    local_track_manager: Mutex<LocalTrackManager>,
     paginated_limit: usize,
     webapi_token: Mutex<Option<WebApiToken>>,
     webapi_client_id: Mutex<Option<String>>,
@@ -83,7 +82,6 @@ impl WebApi {
         Self {
             agent: agent.build().into(),
             cache: WebApiCache::new(cache_base),
-            local_track_manager: Mutex::new(LocalTrackManager::new()),
             paginated_limit,
             webapi_token: Mutex::new(None),
             webapi_client_id: Mutex::new(None),
@@ -273,6 +271,69 @@ impl WebApi {
             .map_err(|err| Error::WebApiError(err.to_string()))
     }
 
+    /// GET a public JSON endpoint that needs no Spotify credentials (LRCLIB).
+    /// Retries a couple of times when the server is busy, `Ok(None)` on 404.
+    pub(super) fn get_public_json<T: DeserializeOwned>(
+        &self,
+        url: &str,
+    ) -> Result<Option<T>, Error> {
+        const ATTEMPTS: u32 = 3;
+
+        let user_agent = format!(
+            "psst/{} (https://github.com/jpochyla/psst)",
+            env!("CARGO_PKG_VERSION")
+        );
+        let mut attempt = 0;
+        loop {
+            let mut response = self
+                .agent
+                .get(url)
+                .header("User-Agent", &user_agent)
+                .call()
+                .map_err(|err| Error::WebApiError(err.to_string()))?;
+            let status = response.status();
+            if status == StatusCode::NOT_FOUND {
+                return Ok(None);
+            }
+            let busy = status == StatusCode::SERVICE_UNAVAILABLE
+                || status == StatusCode::TOO_MANY_REQUESTS;
+            if busy && attempt + 1 < ATTEMPTS {
+                attempt += 1;
+                log::info!("{url} is busy, retrying");
+                thread::sleep(Duration::from_secs(1 << attempt));
+                continue;
+            }
+            if busy {
+                return Err(Error::WebApiError(
+                    "The lyrics server is busy, try again in a moment".to_string(),
+                ));
+            }
+            if status.is_client_error() || status.is_server_error() {
+                return Err(Error::WebApiError(format!(
+                    "http status: {}",
+                    status.as_u16()
+                )));
+            }
+            return response
+                .body_mut()
+                .read_json()
+                .map(Some)
+                .map_err(|err| Error::WebApiError(err.to_string()));
+        }
+    }
+
+    pub(super) fn cache_get_json<T: DeserializeOwned>(&self, bucket: &str, key: &str) -> Option<T> {
+        let file = self.cache.get(bucket, key)?;
+        serde_json::from_reader(io::BufReader::new(file)).ok()
+    }
+
+    pub(super) fn cache_set_json(&self, bucket: &str, key: &str, value: &impl Serialize) {
+        match serde_json::to_vec(value) {
+            Ok(bytes) => self.cache.set(bucket, key, &bytes),
+            Err(err) => log::warn!("failed to serialize {bucket} cache entry: {err}"),
+        }
+    }
+
     /// Send a request using `self.load()`, but only if it isn't already present
     /// in cache.
     fn load_cached<T: Data + DeserializeOwned>(
@@ -406,16 +467,6 @@ impl WebApi {
         Ok(results)
     }
 
-    /// Load local track files from the official client's database.
-    pub fn load_local_tracks(&self, username: &str) {
-        if let Err(err) = self
-            .local_track_manager
-            .lock()
-            .load_tracks_for_user(username)
-        {
-            log::error!("failed to read local tracks: {err}");
-        }
-    }
 
     fn load_and_return_home_section(&self, request: &RequestBuilder) -> Result<MixedView, Error> {
         #[derive(Deserialize)]
@@ -667,6 +718,7 @@ impl WebApi {
                                 },
                                 collaborative: false,
                                 public: None,
+                                pinned: false,
                             });
                         }
                         DataTypename::Artist => artist.push_back(Artist {
@@ -1388,7 +1440,9 @@ impl WebApi {
         .query("format", "json")
         .query("vocalRemoval", "false")
         .query("market", "from_token")
-        .header("app-platform", "WebPlayer");
+        .header("app-platform", "WebPlayer")
+        // `spclient` answers 403 to the Web API OAuth token.
+        .partner_auth();
 
         let lyrics: Cached<Root> = self.load_cached(request, "lyrics", &track_id)?;
         Ok(lyrics.data.lyrics.lines)
@@ -1439,7 +1493,13 @@ impl WebApi {
         Ok(self
             .load_all_pages(request)?
             .into_iter()
-            .map(|item: SavedTrack| item.track)
+            .enumerate()
+            .map(|(index, item): (usize, SavedTrack)| {
+                // Newest first, which is the "date added" order.
+                let mut track = item.track;
+                Arc::make_mut(&mut track).track_pos = index;
+                track
+            })
             .collect())
     }
 
@@ -1587,11 +1647,122 @@ impl WebApi {
 
 /// Playlist endpoints.
 impl WebApi {
-    // https://developer.spotify.com/documentation/web-api/reference/get-a-list-of-current-users-playlists
+    /// All playlists in the library, pinned ones first, as the official client
+    /// shows them.  The public Web API leaves out Spotify-generated playlists
+    /// (Daily Mixes and other mixes) and knows nothing about pins, so this asks
+    /// pathfinder first and only falls back to the Web API.
     pub fn get_playlists(&self) -> Result<Vector<Playlist>, Error> {
+        match self.get_library_playlists() {
+            Ok(playlists) => Ok(playlists),
+            Err(err) => {
+                log::warn!("failed to load library from pathfinder, using Web API: {err}");
+                self.get_web_api_playlists()
+            }
+        }
+    }
+
+    // https://developer.spotify.com/documentation/web-api/reference/get-a-list-of-current-users-playlists
+    fn get_web_api_playlists(&self) -> Result<Vector<Playlist>, Error> {
         let request = &RequestBuilder::new("v1/me/playlists", Method::Get, None);
         let result: Vector<Playlist> = self.load_all_pages(request)?;
         Ok(result)
+    }
+
+    fn get_library_playlists(&self) -> Result<Vector<Playlist>, Error> {
+        const PAGE_SIZE: usize = 50;
+
+        let mut playlists = Vector::new();
+        let mut offset = 0;
+        loop {
+            let response: pathfinder::LibraryResponse = self.pathfinder_query(
+                pathfinder::LIBRARY_V3,
+                json!({
+                    "filters": ["Playlists"],
+                    "order": null,
+                    "textFilter": null,
+                    "features": [],
+                    "limit": PAGE_SIZE,
+                    "offset": offset,
+                    // Include the playlists inside of folders.
+                    "flatten": true,
+                    "folderUri": null,
+                    "includeFoldersWhenFlattening": false,
+                }),
+            )?;
+            let total = response.total_count();
+            let page_len = response.item_count();
+            playlists.extend(response.into_playlists().map_err(Error::WebApiError)?);
+            offset += page_len;
+            if page_len == 0 || offset >= total || offset >= self.paginated_limit {
+                break;
+            }
+        }
+        // Pinned playlists come first already, but don't rely on it.
+        let (pinned, rest): (Vector<_>, Vector<_>) = playlists.into_iter().partition(|p| p.pinned);
+        let mut playlists = pinned;
+        playlists.append(rest);
+        Ok(playlists)
+    }
+
+    fn get_pathfinder_playlist_page(
+        &self,
+        id: &str,
+        offset: usize,
+        limit: usize,
+    ) -> Result<pathfinder::PlaylistResponse, Error> {
+        self.pathfinder_query(
+            pathfinder::FETCH_PLAYLIST,
+            json!({
+                "uri": format!("spotify:playlist:{id}"),
+                "offset": offset,
+                "limit": limit,
+                "enableWatchFeedEntrypoint": false,
+                "includeEpisodeContentRatingsV2": false,
+            }),
+        )
+    }
+
+    fn get_pathfinder_playlist_tracks(&self, id: &str) -> Result<Vector<Arc<Track>>, Error> {
+        const PAGE_SIZE: usize = 100;
+
+        let mut tracks = Vector::new();
+        let mut offset = 0;
+        loop {
+            let response = self.get_pathfinder_playlist_page(id, offset, PAGE_SIZE)?;
+            let total = response.total_count();
+            let page_len = response.item_count();
+            for mut track in response.into_tracks(Some(LocalLibrary::global())) {
+                // Keeps the playlist order for sorting by "date added".
+                Arc::make_mut(&mut track).track_pos = tracks.len();
+                tracks.push_back(track);
+            }
+            offset += page_len;
+            if page_len == 0 || offset >= total || offset >= self.paginated_limit {
+                break;
+            }
+        }
+        Ok(tracks)
+    }
+
+    /// Send a persisted pathfinder (GraphQL) query to `api-partner`.
+    fn pathfinder_query<T: DeserializeOwned>(
+        &self,
+        (operation, hash): (&str, &str),
+        variables: serde_json::Value,
+    ) -> Result<T, Error> {
+        let json = json!({
+            "operationName": operation,
+            "variables": variables,
+            "extensions": {
+                "persistedQuery": { "version": 1, "sha256Hash": hash }
+            },
+        });
+        let request =
+            &RequestBuilder::new("pathfinder/v2/query".to_string(), Method::Post, Some(json))
+                .set_base_uri("api-partner.spotify.com")
+                .header("User-Agent", Self::user_agent())
+                .partner_auth();
+        self.load(request)
     }
 
     pub fn follow_playlist(&self, id: &str) -> Result<(), Error> {
@@ -1611,12 +1782,30 @@ impl WebApi {
     // https://developer.spotify.com/documentation/web-api/reference/get-playlist
     pub fn get_playlist(&self, id: &str) -> Result<Playlist, Error> {
         let request = &RequestBuilder::new(format!("v1/playlists/{id}"), Method::Get, None);
-        let result: Playlist = self.load(request)?;
-        Ok(result)
+        match self.load(request) {
+            Ok(playlist) => Ok(playlist),
+            // Spotify-generated mixes are a 404 on the Web API for third-party
+            // apps, but pathfinder serves them.
+            Err(err) => self
+                .get_pathfinder_playlist_page(id, 0, 0)
+                .ok()
+                .and_then(|response| response.playlist())
+                .ok_or(err),
+        }
+    }
+
+    pub fn get_playlist_tracks(&self, id: &str) -> Result<Vector<Arc<Track>>, Error> {
+        match self.get_web_api_playlist_tracks(id) {
+            Ok(tracks) => Ok(tracks),
+            Err(err) => {
+                log::info!("Web API refused playlist {id} ({err}), trying pathfinder");
+                self.get_pathfinder_playlist_tracks(id).map_err(|_| err)
+            }
+        }
     }
 
     // https://developer.spotify.com/documentation/web-api/reference/get-playlist-items
-    pub fn get_playlist_tracks(&self, id: &str) -> Result<Vector<Arc<Track>>, Error> {
+    fn get_web_api_playlist_tracks(&self, id: &str) -> Result<Vector<Arc<Track>>, Error> {
         #[derive(Clone, Deserialize)]
         struct PlaylistItem {
             #[serde(default)]
@@ -1641,7 +1830,7 @@ impl WebApi {
 
         let result: Vector<PlaylistItem> = self.load_all_pages(request)?;
 
-        let local_track_manager = self.local_track_manager.lock();
+        let local_library = LocalLibrary::global();
 
         Ok(result
             .into_iter()
@@ -1649,9 +1838,14 @@ impl WebApi {
             .filter_map(|(index, item)| {
                 let track_source = item.item.or(item.track);
                 let mut track = match track_source {
+                    // Local items usually fail to parse as regular tracks because
+                    // of their `null` IDs, but in case one doesn't, re-route it.
+                    Some(OptionalTrack::Track(track)) if track.is_local => {
+                        local_library.track_from_local_track(&track)
+                    }
                     Some(OptionalTrack::Track(track)) => track,
                     Some(OptionalTrack::Json(json)) => {
-                        local_track_manager.find_local_track(json)?
+                        local_library.track_from_playlist_item(&json)?
                     }
                     None => return None,
                 };

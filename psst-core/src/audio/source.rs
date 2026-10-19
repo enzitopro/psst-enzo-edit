@@ -66,8 +66,20 @@ where
         let input_frames = input.chunks_exact(self.input_channels);
         let output_frames = output.chunks_exact_mut(self.output_channels);
         for (i, o) in input_frames.zip(output_frames) {
-            o[0] = i[0];
-            o[1] = i[1];
+            match (i, o) {
+                // Mono local files go to both channels.
+                ([mono], [left, right, ..]) => {
+                    *left = *mono;
+                    *right = *mono;
+                }
+                // Mono output devices get both channels mixed.
+                ([left, right, ..], [mono]) => *mono = (*left + *right) / 2.0,
+                ([left, right, ..], [out_left, out_right, ..]) => {
+                    *out_left = *left;
+                    *out_right = *right;
+                }
+                (i, o) => o[0] = i[0],
+            }
             // Assume the rest is is implicitly silence.
         }
         output.len()

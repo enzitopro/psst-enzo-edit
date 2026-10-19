@@ -39,12 +39,14 @@ impl LocalItemRegistry {
 
     pub fn get_or_insert(path: PathBuf) -> u128 {
         let mut registry = LOCAL_REGISTRY.lock().unwrap();
-        registry.path_to_id.get(&path).copied().unwrap_or_else(|| {
-            let id = registry.next_id;
-            registry.next_id += 1;
-            registry.id_to_path.insert(id, path.clone());
-            id
-        })
+        if let Some(id) = registry.path_to_id.get(&path) {
+            return *id;
+        }
+        let id = registry.next_id;
+        registry.next_id += 1;
+        registry.id_to_path.insert(id, path.clone());
+        registry.path_to_id.insert(path, id);
+        id
     }
 
     pub fn get(id: u128) -> Option<PathBuf> {
@@ -148,6 +150,10 @@ impl ItemId {
             LocalItemRegistry::get_or_insert(path),
             ItemIdType::LocalFile,
         )
+    }
+
+    pub fn is_local(&self) -> bool {
+        self.id_type == ItemIdType::LocalFile
     }
 
     pub fn to_local(&self) -> PathBuf {
