@@ -267,6 +267,36 @@ fn diagnostics_album_detail() {
     }
 }
 
+/// Loads the home page sections.
+#[test]
+#[ignore]
+fn diagnostics_home_sections() {
+    let mut config = Config::load().expect("Psst config not found, log in first");
+    init(&mut config);
+    let api = WebApi::global();
+    for (name, result) in [
+        ("made for you", api.get_made_for_you()),
+        ("top mixes", api.get_top_mixes()),
+        ("recommended stations", api.recommended_stations()),
+        ("uniquely yours", api.uniquely_yours()),
+        ("best of artists", api.best_of_artists()),
+        ("jump back in", api.jump_back_in()),
+        ("your shows", api.your_shows()),
+        ("shows you might like", api.shows_that_you_might_like()),
+    ] {
+        match result {
+            Ok(view) => println!(
+                "{name}: ok, {:?}, {} playlists, {} albums, {} artists",
+                view.title,
+                view.playlists.len(),
+                view.albums.len(),
+                view.artists.len()
+            ),
+            Err(err) => println!("{name}: FAILED {err}"),
+        }
+    }
+}
+
 /// Fetches raw album objects from the Web API to see which `album_type`
 /// values Spotify sends.
 #[test]

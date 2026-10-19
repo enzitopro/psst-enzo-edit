@@ -511,6 +511,7 @@ impl WebApi {
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase")]
         pub struct Title {
+            #[serde(alias = "transformedLabel")]
             text: String,
         }
 
@@ -614,6 +615,8 @@ impl WebApi {
             Playlist,
             Artist,
             Album,
+            // Episodes, audiobooks and new kinds of items are skipped.
+            #[serde(other)]
             NotFound,
         }
 
@@ -1648,7 +1651,7 @@ impl WebApi {
             "extensions": {
                 "persistedQuery": {
                     "version": 1,
-                    "sha256Hash": "eb3fba2d388cf4fc4d696b1757a58584e9538a3b515ea742e9cc9465807340be"
+                    "sha256Hash": "5fb7da7a03ee2776c0670856609cb85a189a3cecc36cc160b91cde79063b9cf1"
                 }
             },
             "operationName": "homeSection",
@@ -1658,7 +1661,8 @@ impl WebApi {
                 "sp_t": access_token,
                 "timeZone": time_zone,
                 "country": country,
-                "uri": section_uri
+                "uri": section_uri,
+                "homeEndUserIntegration": "INTEGRATION_WEB_PLAYER"
             },
         });
 
