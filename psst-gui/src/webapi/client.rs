@@ -528,10 +528,12 @@ impl WebApi {
 
         #[derive(Deserialize)]
         pub struct Content {
+            // Unknown item kinds come without `data`; they're skipped (no `uri`).
+            #[serde(default)]
             data: ContentData,
         }
 
-        #[derive(Deserialize)]
+        #[derive(Deserialize, Default)]
         #[serde(rename_all = "camelCase")]
         pub struct ContentData {
             #[serde(rename = "__typename")]
@@ -609,13 +611,14 @@ impl WebApi {
             name: String,
         }
 
-        #[derive(Deserialize)]
+        #[derive(Deserialize, Default)]
         pub enum DataTypename {
             Podcast,
             Playlist,
             Artist,
             Album,
             // Episodes, audiobooks and new kinds of items are skipped.
+            #[default]
             #[serde(other)]
             NotFound,
         }
