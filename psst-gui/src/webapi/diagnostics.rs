@@ -226,6 +226,62 @@ fn diagnostics_lyrics() {
     println!("\nfound {found} ({synced} synced), missing {missing}");
 }
 
+/// Opens the albums of a few tracks of `PSST_DIAG_PLAYLIST`, like "Go to
+/// Album" does.
+#[test]
+#[ignore]
+fn diagnostics_album_detail() {
+    let mut config = Config::load().expect("Psst config not found, log in first");
+    init(&mut config);
+    let id = std::env::var("PSST_DIAG_PLAYLIST").expect("PSST_DIAG_PLAYLIST");
+    let tracks = WebApi::global().get_playlist_tracks(&id).expect("playlist");
+    for track in tracks.iter().filter(|t| !t.is_local).take(3) {
+        let album = track.album.as_ref().expect("album link");
+        match WebApi::global().get_album(&album.id) {
+            Ok(detail) => println!(
+                "album {:?} ({}): ok, {} tracks",
+                album.name,
+                album.id,
+                detail.data.tracks.len()
+            ),
+            Err(err) => println!("album {:?} ({}): FAILED {err}", album.name, album.id),
+        }
+        // The pathfinder fallback on its own.
+        match WebApi::global().get_pathfinder_album_for_tests(&album.id) {
+            Ok(detail) => println!(
+                "  pathfinder: ok, {:?} by {}, {} tracks, {} ({:?}), label {:?}",
+                detail.name,
+                detail
+                    .artists
+                    .iter()
+                    .map(|a| a.name.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                detail.tracks.len(),
+                detail.release(),
+                detail.album_type,
+                detail.label
+            ),
+            Err(err) => println!("  pathfinder: FAILED {err}"),
+        }
+    }
+}
+
+/// Fetches raw album objects from the Web API to see which `album_type`
+/// values Spotify sends.
+#[test]
+#[ignore]
+fn diagnostics_album_types() {
+    let mut config = Config::load().expect("Psst config not found, log in first");
+    init(&mut config);
+    for query in ["Yeat", "bladee", "Sewerslvt", "plattmade"] {
+        match WebApi::global().raw_search_album_types(query) {
+            Ok(types) => println!("{query}: {types:?}"),
+            Err(err) => println!("{query}: FAILED {err}"),
+        }
+    }
+}
+
 /// Loads the library playlist named `PSST_DIAG_NAME` and reports what comes
 /// back from each source.
 #[test]
@@ -325,6 +381,86 @@ fn diagnostics_play_spotify_track() {
     }
     println!("playing: {playing}, position reached: {last_position:?}");
     assert!(playing && last_position >= Duration::from_secs(3));
+}
+
+/// Lets the first of two local files (`PSST_DIAG_QUEUE`) end on its own, near
+/// its end, to check that the following one gets preloaded and played.
+#[test]
+#[ignore]
+fn diagnostics_player_preload() {
+    use psst_core::{
+        audio::{normalize::NormalizationLevel, output::DefaultAudioOutput, probe::TrackProbe},
+        cache::Cache,
+        cdn::Cdn,
+        item_id::ItemId,
+        player::{item::PlaybackItem, PlaybackConfig, Player, PlayerCommand, PlayerEvent},
+    };
+
+    let files: Vec<PathBuf> = std::env::var("PSST_DIAG_QUEUE")
+        .expect("PSST_DIAG_QUEUE=<short file>;<file>")
+        .split(';')
+        .map(PathBuf::from)
+        .collect();
+    let duration = TrackProbe::new(&files[0]).unwrap().duration.unwrap();
+    let items: Vec<PlaybackItem> = files
+        .iter()
+        .take(2)
+        .map(|path| PlaybackItem {
+            item_id: ItemId::from_local(path.clone()),
+            norm_level: NormalizationLevel::Track,
+        })
+        .collect();
+
+    let output = DefaultAudioOutput::open().expect("audio output");
+    let session = SessionService::empty();
+    let mut player = Player::new(
+        session.clone(),
+        Cdn::new(session, None).unwrap(),
+        Cache::new(std::env::temp_dir().join("psst-diagnostics-cache")).unwrap(),
+        PlaybackConfig::default(),
+        &output,
+    );
+    let sender = player.sender();
+    let receiver = player.receiver();
+    sender
+        .send(PlayerEvent::Command(PlayerCommand::SetVolume { volume: 0.0 }))
+        .unwrap();
+    sender
+        .send(PlayerEvent::Command(PlayerCommand::LoadQueue {
+            items: items.clone(),
+            position: 0,
+        }))
+        .unwrap();
+    let started = Instant::now();
+    let mut seeked = false;
+    let mut preloaded = false;
+    let mut second_playing = None;
+    while started.elapsed() < Duration::from_secs(20) && second_playing.is_none() {
+        let Ok(event) = receiver.recv_timeout(Duration::from_millis(20)) else {
+            continue;
+        };
+        match &event {
+            PlayerEvent::Playing { path, .. } if path.item_id == items[0].item_id && !seeked => {
+                // Jump to 6 seconds before the end.
+                seeked = true;
+                let position = duration.saturating_sub(Duration::from_secs(6));
+                sender
+                    .send(PlayerEvent::Command(PlayerCommand::Seek { position }))
+                    .unwrap();
+            }
+            PlayerEvent::Preloaded { item, result } => {
+                preloaded = item.item_id == items[1].item_id && result.is_ok();
+                println!("{:>6} ms  preloaded next: {preloaded}", started.elapsed().as_millis());
+            }
+            PlayerEvent::Playing { path, .. } if path.item_id == items[1].item_id => {
+                second_playing = Some(started.elapsed());
+            }
+            _ => {}
+        }
+        player.handle(event);
+    }
+    println!("second track started after {second_playing:?}, preloaded: {preloaded}");
+    assert!(preloaded && second_playing.is_some());
 }
 
 /// Drives the real player (decoder, resampler, audio output at volume 0)

@@ -13,8 +13,8 @@ use crate::{
     },
     webapi::WebApi,
     widget::{
-        icons, icons::SvgIcon, Border, Empty, MyWidgetExt, Overlay, RemoteImage, ThemeScope,
-        ViewDispatcher,
+        icons, icons::SvgIcon, Border, CornerOverlay, Empty, MyWidgetExt, Overlay, RemoteImage,
+        ThemeScope, ViewDispatcher,
     },
 };
 use credits::TrackCredits;
@@ -266,7 +266,13 @@ fn root_widget() -> impl Widget<AppState> {
     let main = Flex::column()
         .cross_axis_alignment(CrossAxisAlignment::Start)
         .with_child(topbar)
-        .with_flex_child(Overlay::bottom(route_widget(), alert_widget()), 1.0)
+        .with_flex_child(
+            Overlay::bottom(
+                CornerOverlay::new(route_widget(), lyrics::lyrics_panel(), theme::grid(2.0)),
+                alert_widget(),
+            ),
+            1.0,
+        )
         .with_child(playback::panel_widget())
         .background(theme::BACKGROUND_LIGHT);
 

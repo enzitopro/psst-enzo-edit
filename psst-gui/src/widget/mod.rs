@@ -1,4 +1,5 @@
 mod checkbox;
+mod corner_overlay;
 mod dispatcher;
 mod empty;
 pub mod fill_between;
@@ -19,6 +20,7 @@ use druid::{
 };
 
 pub use checkbox::Checkbox;
+pub use corner_overlay::CornerOverlay;
 pub use dispatcher::ViewDispatcher;
 use druid_shell::Cursor;
 pub use empty::Empty;

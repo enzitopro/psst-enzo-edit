@@ -105,18 +105,23 @@ impl AlbumLink {
 #[derive(Clone, Debug, Data, Eq, PartialEq, Hash, Deserialize, Serialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum AlbumType {
-    #[default]
-    Album,
     Single,
     Compilation,
+    // Unknown types (e.g. "ep") are shown as albums instead of failing the
+    // whole album page.  `other` has to be the last variant.
+    #[default]
+    #[serde(other)]
+    Album,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Data, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DatePrecision {
-    Year,
     Month,
     Day,
+    // Same for unknown precisions.
+    #[serde(other)]
+    Year,
 }
 
 #[derive(Clone, Debug, Data, Lens, Deserialize)]
@@ -128,8 +133,9 @@ pub struct Copyright {
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Data, Deserialize)]
 pub enum CopyrightType {
-    #[serde(rename = "C")]
-    Copyright,
     #[serde(rename = "P")]
     Performance,
+    // And for unknown copyright types.
+    #[serde(rename = "C", other)]
+    Copyright,
 }

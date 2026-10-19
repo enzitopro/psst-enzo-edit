@@ -4,8 +4,8 @@ use druid::widget::{
     Button, Container, CrossAxisAlignment, Flex, Label, LineBreaking, List, Scroll, TextBox,
 };
 use druid::{
-    lens::Map, Data, FontDescriptor, FontFamily, FontWeight, Insets, LensExt, Point, Screen,
-    Selector, Size, Target, Widget, WidgetExt, WindowDesc,
+    lens::Map, widget::Either, Data, FontDescriptor, FontFamily, FontWeight, Insets, LensExt,
+    Selector, Widget, WidgetExt,
 };
 
 use crate::cmd;
@@ -14,7 +14,7 @@ use crate::data::{
     AppState, Ctx, Lyrics, LyricsCandidate, LyricsSearch, NowPlaying, Playable, TrackLines,
 };
 use crate::error::Error;
-use crate::widget::{MyWidgetExt, ThemeScope};
+use crate::widget::{Empty, MyWidgetExt};
 use crate::{webapi::WebApi, widget::Async};
 
 use super::theme;
@@ -244,20 +244,20 @@ struct LineStyle {
     font_size: f64,
     /// Spacing kept around the current line when scrolling to it.
     scroll_margin: f64,
-    /// Seek commands must reach the main window from the floating one.
-    global_commands: bool,
+    /// The small panel has no search box of its own.
+    in_panel: bool,
 }
 
 const MAIN_VIEW_STYLE: LineStyle = LineStyle {
     font_size: 28.0,
     scroll_margin: theme::GRID * 16.0,
-    global_commands: false,
+    in_panel: false,
 };
 
-const FLOATING_STYLE: LineStyle = LineStyle {
-    font_size: 20.0,
-    scroll_margin: theme::GRID * 8.0,
-    global_commands: true,
+const PANEL_STYLE: LineStyle = LineStyle {
+    font_size: 18.0,
+    scroll_margin: theme::GRID * 6.0,
+    in_panel: true,
 };
 
 fn lyrics_line_widget(style: LineStyle) -> impl Widget<Ctx<Playhead, TrackLines>> {
@@ -292,15 +292,10 @@ fn lyrics_line_widget(style: LineStyle) -> impl Widget<Ctx<Playhead, TrackLines>
                 ctx.scroll_area_to_view(ctx.size().to_rect().inflate(0.0, style.scroll_margin));
             }
         })
-        .on_left_click(move |ctx, _, line, _| {
+        .on_left_click(|ctx, _, line, _| {
             let start = line.data.start_ms();
             if start != 0 {
-                let command = cmd::SKIP_TO_POSITION.with(start);
-                if style.global_commands {
-                    ctx.submit_command(command.to(Target::Global));
-                } else {
-                    ctx.submit_command(command);
-                }
+                ctx.submit_command(cmd::SKIP_TO_POSITION.with(start));
             }
         })
 }
@@ -329,7 +324,7 @@ fn lyrics_lines_widget(style: LineStyle) -> impl Widget<AppState> {
                 Error::WebApiError(message) if message.contains("busy") => {
                     format!("{message}.")
                 }
-                _ if style.global_commands => {
+                _ if style.in_panel => {
                     "No lyrics found. Open the lyrics view to search for them.".to_string()
                 }
                 _ => "No lyrics found for this track. Try searching above.".to_string(),
@@ -347,7 +342,7 @@ fn track_lyrics_widget() -> impl Widget<AppState> {
 }
 
 /// Loads the lyrics of the playing track into `AppState::lyrics`.  Attached
-/// to the main window, so they also load for the floating window alone.
+/// to the window root, so they also load for the small panel alone.
 pub fn lyrics_loader<W: Widget<AppState> + 'static>(widget: W) -> impl Widget<AppState> {
     widget.on_command_async(
         SHOW_LYRICS,
@@ -368,34 +363,11 @@ pub fn lyrics_loader<W: Widget<AppState> + 'static>(widget: W) -> impl Widget<Ap
     )
 }
 
-/// Small always-on-top window with the lyrics, opened from the playback bar.
-pub fn lyrics_window() -> WindowDesc<AppState> {
-    let size = Size::new(theme::grid(46.0), theme::grid(34.0));
-    // Bottom right corner of the primary screen, above the taskbar.
-    let position = Screen::get_monitors()
-        .into_iter()
-        .find(|monitor| monitor.is_primary())
-        .map(|monitor| {
-            let work = monitor.virtual_work_rect();
-            Point::new(
-                work.x1 - size.width - theme::grid(3.0),
-                work.y1 - size.height - theme::grid(3.0),
-            )
-        });
-    let window = WindowDesc::new(floating_lyrics_widget())
-        .title("Lyrics")
-        .window_size(size)
-        .with_min_size((theme::grid(30.0), theme::grid(18.0)))
-        .resizable(true)
-        .set_always_on_top(true);
-    match position {
-        Some(position) => window.set_position(position),
-        None => window,
-    }
-}
-
-fn floating_lyrics_widget() -> impl Widget<AppState> {
-    let header = Label::dynamic(|data: &AppState, _| {
+/// Small lyrics panel floating over the bottom right corner of the main
+/// window, toggled from the playback bar, so the lyrics stay visible while
+/// browsing.
+pub fn lyrics_panel() -> impl Widget<AppState> {
+    let title = Label::dynamic(|data: &AppState, _| {
         data.playback
             .now_playing
             .as_ref()
@@ -405,29 +377,37 @@ fn floating_lyrics_widget() -> impl Widget<AppState> {
     })
     .with_text_size(theme::TEXT_SIZE_SMALL)
     .with_text_color(theme::PLACEHOLDER_COLOR)
-    .with_line_break_mode(LineBreaking::Clip)
-    .expand_width()
-    .padding(Insets::new(
-        theme::grid(2.0),
-        theme::grid(1.0),
-        theme::grid(2.0),
+    .with_line_break_mode(LineBreaking::Clip);
+    let close = Label::new("✕")
+        .with_text_size(theme::TEXT_SIZE_SMALL)
+        .padding(Insets::uniform_xy(theme::grid(0.75), theme::grid(0.25)))
+        .link()
+        .rounded(theme::BUTTON_BORDER_RADIUS)
+        .on_left_click(|ctx, _, _, _| ctx.submit_command(cmd::TOGGLE_LYRICS_WINDOW));
+    let header = Flex::row()
+        .cross_axis_alignment(CrossAxisAlignment::Center)
+        .with_flex_child(title, 1.0)
+        .with_child(close)
+        .padding(Insets::new(
+            theme::grid(1.5),
+            theme::grid(1.0),
+            theme::grid(1.0),
+            theme::grid(0.5),
+        ));
+    let lines = Scroll::new(lyrics_lines_widget(PANEL_STYLE).padding(Insets::new(
         theme::grid(0.5),
-    ));
-    let lines = Scroll::new(
-        lyrics_lines_widget(FLOATING_STYLE).padding(Insets::new(
-            theme::grid(1.0),
-            0.0,
-            theme::grid(1.0),
-            theme::grid(2.0),
-        )),
-    )
+        0.0,
+        theme::grid(0.5),
+        theme::grid(1.5),
+    )))
     .vertical()
     .expand();
-    ThemeScope::new(
-        Flex::column()
-            .with_child(header)
-            .with_flex_child(lines, 1.0)
-            .background(theme::BACKGROUND_DARK)
-            .expand(),
-    )
+    let panel = Flex::column()
+        .with_child(header)
+        .with_flex_child(lines, 1.0)
+        .fix_size(theme::grid(42.0), theme::grid(30.0))
+        .background(theme::BACKGROUND_DARK)
+        .rounded(theme::GRID)
+        .border(theme::GREY_500, 1.0);
+    Either::new(|data: &AppState, _| data.lyrics_panel_open, panel, Empty)
 }

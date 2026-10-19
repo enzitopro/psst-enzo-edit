@@ -12,10 +12,12 @@ use psst_core::item_id::ItemId;
 use serde::Deserialize;
 use serde_json::Value;
 
+use time::Date;
+
 use super::local_library::{LocalItem, LocalLibrary};
 use crate::data::{
-    utils::sanitize_html_string, AlbumLink, ArtistLink, Image, Playlist, PublicUser, Track,
-    TrackId,
+    utils::sanitize_html_string, Album, AlbumLink, AlbumType, ArtistLink, Copyright,
+    CopyrightType, DatePrecision, Image, Playlist, PublicUser, Track, TrackId,
 };
 
 pub const LIBRARY_V3: (&str, &str) = (
@@ -25,6 +27,10 @@ pub const LIBRARY_V3: (&str, &str) = (
 pub const FETCH_PLAYLIST: (&str, &str) = (
     "fetchPlaylist",
     "21ea11a6ac75a5f3e01fd365d29c18e0a4a8b7dc09f89bbb5d73910190c6acaf",
+);
+pub const GET_ALBUM: (&str, &str) = (
+    "getAlbum",
+    "0b6ce3511e1b02e4a40fa95440f992acbe85080eb308af9194322d708fc1914f",
 );
 
 fn id_from_uri(uri: &str) -> Arc<str> {
@@ -446,10 +452,297 @@ impl PathfinderLocalTrack {
     }
 }
 
+#[derive(Deserialize)]
+pub struct AlbumResponse {
+    data: AlbumData,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AlbumData {
+    album_union: PathfinderAlbumDetail,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PathfinderAlbumDetail {
+    #[serde(rename = "__typename")]
+    typename: String,
+    #[serde(default)]
+    uri: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default, rename = "type")]
+    album_type: Option<String>,
+    #[serde(default)]
+    artists: Option<ArtistList>,
+    #[serde(default)]
+    cover_art: Option<Sources>,
+    #[serde(default)]
+    date: Option<AlbumDate>,
+    #[serde(default)]
+    label: Option<String>,
+    #[serde(default)]
+    copyright: Option<CopyrightList>,
+    #[serde(default)]
+    tracks_v2: Option<AlbumTracks>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AlbumDate {
+    #[serde(default)]
+    iso_string: Option<String>,
+    #[serde(default)]
+    precision: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct CopyrightList {
+    #[serde(default)]
+    items: Vec<PathfinderCopyright>,
+}
+
+#[derive(Deserialize)]
+struct PathfinderCopyright {
+    #[serde(default, rename = "type")]
+    kind: Option<String>,
+    #[serde(default)]
+    text: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AlbumTracks {
+    #[serde(default)]
+    total_count: usize,
+    #[serde(default)]
+    items: Vec<AlbumTrackItem>,
+}
+
+#[derive(Deserialize)]
+struct AlbumTrackItem {
+    #[serde(default)]
+    track: Option<PathfinderAlbumTrack>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PathfinderAlbumTrack {
+    uri: String,
+    name: String,
+    #[serde(default)]
+    duration: Option<Millis>,
+    #[serde(default)]
+    artists: Option<ArtistList>,
+    #[serde(default)]
+    disc_number: usize,
+    #[serde(default)]
+    track_number: usize,
+    #[serde(default)]
+    content_rating: Option<ContentRating>,
+    #[serde(default)]
+    playability: Option<Playability>,
+}
+
+impl AlbumResponse {
+    pub fn total_tracks(&self) -> usize {
+        self.data
+            .album_union
+            .tracks_v2
+            .as_ref()
+            .map_or(0, |tracks| tracks.total_count)
+    }
+
+    pub fn page_len(&self) -> usize {
+        self.data
+            .album_union
+            .tracks_v2
+            .as_ref()
+            .map_or(0, |tracks| tracks.items.len())
+    }
+
+    /// The tracks of this page, for appending the ones of later pages.
+    pub fn into_tracks(self) -> Vec<Arc<Track>> {
+        let Some(tracks) = self.data.album_union.tracks_v2 else {
+            return Vec::new();
+        };
+        tracks
+            .items
+            .into_iter()
+            .filter_map(|item| {
+                let track = item.track?;
+                Some(Arc::new(Track {
+                    id: TrackId(ItemId::from_uri(&track.uri)?),
+                    name: track.name.into(),
+                    album: None,
+                    artists: track
+                        .artists
+                        .map(|artists| {
+                            artists
+                                .items
+                                .into_iter()
+                                .map(|artist| ArtistLink {
+                                    id: id_from_uri(&artist.uri),
+                                    name: artist.profile.name.into(),
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                    duration: Duration::from_millis(
+                        track.duration.map_or(0, |d| d.total_milliseconds),
+                    ),
+                    disc_number: track.disc_number,
+                    track_number: track.track_number,
+                    explicit: track
+                        .content_rating
+                        .is_some_and(|rating| rating.label == "EXPLICIT"),
+                    is_local: false,
+                    local_path: None,
+                    is_playable: track.playability.map(|p| p.playable),
+                    popularity: None,
+                    track_pos: 0,
+                    lyrics: None,
+                }))
+            })
+            .collect()
+    }
+
+    /// The album, with the tracks of this page.
+    pub fn into_album(self) -> Option<Album> {
+        let album = &self.data.album_union;
+        if album.typename != "Album" {
+            return None;
+        }
+        let id = id_from_uri(album.uri.as_deref()?);
+        let name: Arc<str> = album.name.as_deref().unwrap_or_default().into();
+        let album_type = match album.album_type.as_deref() {
+            Some("SINGLE") => AlbumType::Single,
+            Some("COMPILATION") => AlbumType::Compilation,
+            _ => AlbumType::Album,
+        };
+        let images = album
+            .cover_art
+            .as_ref()
+            .map(Sources::images)
+            .unwrap_or_default();
+        let artists = album
+            .artists
+            .as_ref()
+            .map(|artists| {
+                artists
+                    .items
+                    .iter()
+                    .map(|artist| ArtistLink {
+                        id: id_from_uri(&artist.uri),
+                        name: artist.profile.name.as_str().into(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let copyrights = album
+            .copyright
+            .as_ref()
+            .map(|copyrights| {
+                copyrights
+                    .items
+                    .iter()
+                    .filter_map(|copyright| {
+                        Some(Copyright {
+                            text: copyright.text.as_deref()?.into(),
+                            kind: match copyright.kind.as_deref() {
+                                Some("P") => CopyrightType::Performance,
+                                _ => CopyrightType::Copyright,
+                            },
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let label: Arc<str> = album.label.as_deref().unwrap_or_default().into();
+        let (release_date, release_date_precision) = album
+            .date
+            .as_ref()
+            .map(|date| {
+                let parsed = date.iso_string.as_deref().and_then(parse_iso_date);
+                let precision = match date.precision.as_deref() {
+                    Some("DAY") => Some(DatePrecision::Day),
+                    Some("MONTH") => Some(DatePrecision::Month),
+                    Some("YEAR") => Some(DatePrecision::Year),
+                    _ => None,
+                };
+                (parsed, precision)
+            })
+            .unwrap_or((None, None));
+        let tracks = self.into_tracks().into_iter().collect();
+        Some(Album {
+            id,
+            name,
+            album_type,
+            images,
+            artists,
+            copyrights,
+            label,
+            tracks,
+            release_date,
+            release_date_precision,
+        })
+    }
+}
+
+/// The date of `2024-02-16T00:00:00Z`.
+fn parse_iso_date(iso: &str) -> Option<Date> {
+    let mut parts = iso.get(..10)?.split('-');
+    let year = parts.next()?.parse().ok()?;
+    let month: u8 = parts.next()?.parse().ok()?;
+    let day = parts.next()?.parse().ok()?;
+    Date::from_calendar_date(year, time::Month::try_from(month).ok()?, day).ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn parses_album_from_pathfinder() {
+        let response: AlbumResponse = serde_json::from_value(json!({
+            "data": { "albumUnion": {
+                "__typename": "Album",
+                "uri": "spotify:album:1jXYc5gip5tqCTDOotfY5L",
+                "name": "2093",
+                "type": "ALBUM",
+                "artists": { "items": [ { "uri": "spotify:artist:3qiHUAX7zY4Qnjx8TNUzVx", "profile": { "name": "Yeat" } } ] },
+                "coverArt": { "sources": [ { "url": "https://i.scdn.co/image/a", "width": 640, "height": 640 } ] },
+                "date": { "isoString": "2024-02-16T00:00:00Z", "precision": "DAY" },
+                "label": "Lyfestyle Corporation",
+                "copyright": { "items": [ { "type": "C", "text": "2024 Lyfestyle" }, { "type": "P", "text": "2024 Lyfestyle" } ] },
+                "tracksV2": { "totalCount": 2, "items": [
+                    { "uid": "a", "track": {
+                        "uri": "spotify:track:4uLU6hMCjMI75M1A2tKUQC",
+                        "name": "Psycho CEO",
+                        "duration": { "totalMilliseconds": 152000 },
+                        "artists": { "items": [ { "uri": "spotify:artist:3qiHUAX7zY4Qnjx8TNUzVx", "profile": { "name": "Yeat" } } ] },
+                        "discNumber": 1, "trackNumber": 1,
+                        "contentRating": { "label": "EXPLICIT" },
+                        "playability": { "playable": true }
+                    } },
+                    { "uid": "b", "track": null }
+                ] }
+            } }
+        }))
+        .unwrap();
+        assert_eq!(response.total_tracks(), 2);
+        let album = response.into_album().unwrap();
+        assert_eq!(&*album.id, "1jXYc5gip5tqCTDOotfY5L");
+        assert_eq!(album.album_type, AlbumType::Album);
+        assert_eq!(album.release(), "February 16, 2024");
+        assert_eq!(&*album.label, "Lyfestyle Corporation");
+        assert_eq!(album.copyrights.len(), 2);
+        assert_eq!(album.tracks.len(), 1);
+        assert!(album.tracks[0].explicit);
+        assert_eq!(album.artists[0].name.as_ref(), "Yeat");
+    }
 
     #[test]
     fn parses_library_with_pinned_playlists() {

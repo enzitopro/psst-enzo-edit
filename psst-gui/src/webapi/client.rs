@@ -223,8 +223,19 @@ impl WebApi {
         const MAX_RETRY_AFTER_SECS: u64 = 30;
 
         let mut attempt = 0;
+        let mut transport_attempts = 0;
         loop {
-            let response = f()?;
+            let response = match f() {
+                Ok(response) => response,
+                // Flaky connections get reset or time out now and then.
+                Err(err) if is_transport_error(&err) && transport_attempts < 2 => {
+                    transport_attempts += 1;
+                    log::info!("request failed ({err}), retrying");
+                    thread::sleep(Duration::from_millis(500 * transport_attempts));
+                    continue;
+                }
+                Err(err) => return Err(err),
+            };
             let status = response.status();
             if status == StatusCode::TOO_MANY_REQUESTS && attempt < MAX_RETRIES {
                 let retry_after = response
@@ -832,6 +843,17 @@ impl WebApi {
     }
 }
 
+/// Whether a failed request didn't reach the server or got cut off, as
+/// opposed to a missing token or session, which a retry won't fix.
+fn is_transport_error(err: &Error) -> bool {
+    let Error::WebApiError(message) = err;
+    let message = message.to_lowercase();
+    message.starts_with("io:")
+        || message.contains("timeout")
+        || message.contains("timed out")
+        || message.contains("connection")
+}
+
 static GLOBAL_WEBAPI: OnceLock<Arc<WebApi>> = OnceLock::new();
 
 /// Global instance.
@@ -1340,8 +1362,56 @@ impl WebApi {
     pub fn get_album(&self, id: &str) -> Result<Cached<Arc<Album>>, Error> {
         let request = &RequestBuilder::new(format!("v1/albums/{id}"), Method::Get, None)
             .query("market", "from_token");
-        let result = self.load_cached(request, "album", id)?;
-        Ok(result)
+        match self.load_cached(request, "album", id) {
+            Ok(result) => Ok(result),
+            // Like playlists, fall back to pathfinder when the Web API fails.
+            Err(err) => {
+                log::warn!("Web API failed for album {id} ({err}), trying pathfinder");
+                self.get_pathfinder_album(id)
+                    .map(|album| Cached::fresh(Arc::new(album)))
+                    .map_err(|fallback_err| {
+                        log::warn!("pathfinder failed for album {id}: {fallback_err}");
+                        err
+                    })
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub fn get_pathfinder_album_for_tests(&self, id: &str) -> Result<Album, Error> {
+        self.get_pathfinder_album(id)
+    }
+
+    fn get_pathfinder_album(&self, id: &str) -> Result<Album, Error> {
+        const PAGE_SIZE: usize = 50;
+
+        let page = |offset: usize| -> Result<pathfinder::AlbumResponse, Error> {
+            self.pathfinder_query(
+                pathfinder::GET_ALBUM,
+                json!({
+                    "uri": format!("spotify:album:{id}"),
+                    "locale": "",
+                    "offset": offset,
+                    "limit": PAGE_SIZE,
+                }),
+            )
+        };
+        let first = page(0)?;
+        let total = first.total_tracks();
+        let mut offset = first.page_len();
+        let mut album = first
+            .into_album()
+            .ok_or_else(|| Error::WebApiError("Album not found".to_string()))?;
+        while offset < total {
+            let next = page(offset)?;
+            let len = next.page_len();
+            if len == 0 {
+                break;
+            }
+            album.tracks.extend(next.into_tracks());
+            offset += len;
+        }
+        Ok(album)
     }
 }
 
@@ -1890,6 +1960,25 @@ impl WebApi {
 
 /// Search endpoints.
 impl WebApi {
+    /// Diagnostics only: the distinct `album_type` values of an album search.
+    #[cfg(test)]
+    pub fn raw_search_album_types(&self, query: &str) -> Result<Vec<String>, Error> {
+        let request = &RequestBuilder::new("v1/search", Method::Get, None)
+            .query("q", urlencoding::encode(query))
+            .query("type", "album")
+            .query("limit", "10");
+        let value: serde_json::Value = self.load(request)?;
+        let mut types: Vec<String> = value["albums"]["items"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|album| album["album_type"].as_str().map(String::from))
+            .collect();
+        types.sort();
+        types.dedup();
+        Ok(types)
+    }
+
     // https://developer.spotify.com/documentation/web-api/reference/search/
     pub fn search(
         &self,

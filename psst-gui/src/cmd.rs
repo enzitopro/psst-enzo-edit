@@ -35,6 +35,7 @@ pub const NAVIGATE: Selector<Nav> = Selector::new("app.navigates");
 pub const NAVIGATE_BACK: Selector<usize> = Selector::new("app.navigate-back");
 pub const NAVIGATE_REFRESH: Selector = Selector::new("app.navigate-refresh");
 pub const TOGGLE_LYRICS: Selector = Selector::new("app.toggle-lyrics");
+/// Shows or hides the small lyrics panel over the main window.
 pub const TOGGLE_LYRICS_WINDOW: Selector = Selector::new("app.toggle-lyrics-window");
 
 // Playback state

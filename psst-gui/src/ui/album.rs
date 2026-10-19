@@ -37,7 +37,12 @@ pub fn detail_widget() -> impl Widget<AppState> {
         LOAD_DETAIL,
         |d| WebApi::global().get_album(&d.id),
         |_, data, d| data.album_detail.album.defer(d),
-        |_, data, r| data.album_detail.album.update(r),
+        |_, data, r| {
+            if let Err(err) = &r.1 {
+                log::error!("failed to load album {:?} ({}): {err}", r.0.name, r.0.id);
+            }
+            data.album_detail.album.update(r)
+        },
     )
 }
 

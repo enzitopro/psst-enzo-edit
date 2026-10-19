@@ -34,7 +34,7 @@ use druid::{
 use psst_core::{item_id::ItemId, session::SessionService};
 
 pub use crate::data::{
-    album::{Album, AlbumDetail, AlbumLink, AlbumType, DatePrecision},
+    album::{Album, AlbumDetail, AlbumLink, AlbumType, Copyright, CopyrightType, DatePrecision},
     artist::{
         Artist, ArtistAlbums, ArtistDetail, ArtistInfo, ArtistLink, ArtistOverview, ArtistStats,
     },
@@ -90,7 +90,8 @@ pub struct AppState {
     pub added_queue: Vector<QueueEntry>,
     pub lyrics: Promise<Lyrics>,
     pub lyrics_search: LyricsSearch,
-    pub lyrics_window_open: bool,
+    /// The small lyrics panel over the main window.
+    pub lyrics_panel_open: bool,
     pub credits: Option<TrackCredits>,
 }
 
@@ -174,7 +175,7 @@ impl AppState {
             finder: Finder::new(),
             lyrics: Promise::Empty,
             lyrics_search: LyricsSearch::default(),
-            lyrics_window_open: false,
+            lyrics_panel_open: false,
             credits: None,
         }
     }

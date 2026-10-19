@@ -24,7 +24,6 @@ pub struct Delegate {
     preferences_window: Option<WindowId>,
     credits_window: Option<WindowId>,
     artwork_window: Option<WindowId>,
-    lyrics_window: Option<WindowId>,
     image_pool: ThreadPool,
     size_updated: bool,
 }
@@ -38,7 +37,6 @@ impl Delegate {
             preferences_window: None,
             credits_window: None,
             artwork_window: None,
-            lyrics_window: None,
             image_pool: ThreadPool::with_name("image_loading".into(), MAX_IMAGE_THREADS),
             size_updated: false,
         }
@@ -94,7 +92,6 @@ impl Delegate {
         self.main_window = None;
         self.preferences_window = None;
         self.credits_window = None;
-        self.lyrics_window = None;
     }
 
     fn close_preferences(&mut self, ctx: &mut DelegateCtx) {
@@ -132,19 +129,14 @@ impl Delegate {
         Self::show_or_create_window(&mut self.artwork_window, ui::artwork_window, ctx);
     }
 
-    fn toggle_lyrics_window(&mut self, ctx: &mut DelegateCtx, data: &mut AppState) {
-        if let Some(id) = self.lyrics_window.take() {
-            ctx.submit_command(commands::CLOSE_WINDOW.to(id));
-            data.lyrics_window_open = false;
-            return;
-        }
-        let window = ui::lyrics::lyrics_window();
-        self.lyrics_window = Some(window.id);
-        ctx.new_window(window);
-        data.lyrics_window_open = true;
-        // The lyrics are loaded by the main window.
-        if let (Some(main), Some(now_playing)) = (self.main_window, &data.playback.now_playing) {
-            ctx.submit_command(ui::lyrics::SHOW_LYRICS.with(now_playing.clone()).to(main));
+    fn toggle_lyrics_panel(&mut self, ctx: &mut DelegateCtx, data: &mut AppState) {
+        data.lyrics_panel_open = !data.lyrics_panel_open;
+        // Load the lyrics of the playing track for the panel.
+        if data.lyrics_panel_open {
+            if let (Some(main), Some(now_playing)) = (self.main_window, &data.playback.now_playing)
+            {
+                ctx.submit_command(ui::lyrics::SHOW_LYRICS.with(now_playing.clone()).to(main));
+            }
         }
     }
 }
@@ -216,7 +208,7 @@ impl AppDelegate<AppState> for Delegate {
             self.show_artwork(ctx);
             Handled::Yes
         } else if cmd.is(cmd::TOGGLE_LYRICS_WINDOW) {
-            self.toggle_lyrics_window(ctx, data);
+            self.toggle_lyrics_panel(ctx, data);
             Handled::Yes
         } else if let Some((url, title)) = cmd.get(DOWNLOAD_ARTWORK) {
             let safe_title = title.replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "_");
@@ -270,10 +262,6 @@ impl AppDelegate<AppState> for Delegate {
         if self.artwork_window == Some(id) {
             self.artwork_window = None;
         }
-        if self.lyrics_window == Some(id) {
-            self.lyrics_window = None;
-            data.lyrics_window_open = false;
-        }
     }
 
     fn event(
@@ -296,7 +284,6 @@ impl AppDelegate<AppState> for Delegate {
             self.preferences_window,
             self.artwork_window,
             self.credits_window,
-            self.lyrics_window,
         ]
         .contains(&Some(window_id))
         {

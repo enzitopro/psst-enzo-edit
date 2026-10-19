@@ -43,7 +43,12 @@ fn async_albums_widget() -> impl Widget<AppState> {
             LOAD_DETAIL,
             |d| WebApi::global().get_artist_albums(&d.id),
             |_, data, d| data.artist_detail.albums.defer(d),
-            |_, data, r| data.artist_detail.albums.update(r),
+            |_, data, r| {
+                if let Err(err) = &r.1 {
+                    log::error!("failed to load albums of artist {:?}: {err}", r.0.name);
+                }
+                data.artist_detail.albums.update(r)
+            },
         )
 }
 
@@ -65,7 +70,12 @@ fn async_artist_info() -> impl Widget<AppState> {
         LOAD_DETAIL,
         |d| WebApi::global().get_artist_overview(&d.id),
         |_, data, d| data.artist_detail.overview.defer(d),
-        |_, data, r| data.artist_detail.overview.update(r),
+        |_, data, r| {
+            if let Err(err) = &r.1 {
+                log::error!("failed to load artist {:?}: {err}", r.0.name);
+            }
+            data.artist_detail.overview.update(r)
+        },
     )
 }
 
