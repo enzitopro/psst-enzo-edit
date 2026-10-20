@@ -253,6 +253,7 @@ fn root_widget() -> impl Widget<AppState> {
 
     let sidebar = Flex::column()
         .with_flex_child(playlists, 1.0)
+        .with_child(download_status_widget())
         .with_child(controls)
         .background(theme::BACKGROUND_DARK);
 
@@ -410,6 +411,37 @@ fn route_widget() -> impl Widget<AppState> {
         },
     )
     .expand()
+}
+
+/// "Downloading 3 of 80" and the track being saved, while offline downloads run.
+fn download_status_widget() -> impl Widget<AppState> {
+    Either::new(
+        |data: &AppState, _| data.download_queue.is_empty(),
+        Empty,
+        Flex::column()
+            .cross_axis_alignment(CrossAxisAlignment::Start)
+            .with_child(
+                Label::dynamic(|data: &AppState, _| {
+                    let current = data.download_total - data.download_queue.len() + 1;
+                    format!("Downloading {current} of {}", data.download_total)
+                })
+                .with_text_size(theme::TEXT_SIZE_SMALL),
+            )
+            .with_child(
+                Label::dynamic(|data: &AppState, _| {
+                    data.download_queue
+                        .front()
+                        .map(|track| track.name.to_string())
+                        .unwrap_or_default()
+                })
+                .with_text_size(theme::TEXT_SIZE_SMALL)
+                .with_text_color(theme::PLACEHOLDER_COLOR)
+                .with_line_break_mode(LineBreaking::Clip),
+            )
+            .padding(theme::grid(1.0))
+            .expand_width()
+            .background(Border::Top.with_color(theme::GREY_500)),
+    )
 }
 
 fn sidebar_menu_widget() -> impl Widget<AppState> {

@@ -93,6 +93,10 @@ pub struct AppState {
     /// The small lyrics panel over the main window.
     pub lyrics_panel_open: bool,
     pub credits: Option<TrackCredits>,
+    /// Offline downloads still to do, in download order, and how many were
+    /// queued since the queue was last empty.
+    pub download_queue: Vector<Arc<Track>>,
+    pub download_total: usize,
 }
 
 impl AppState {
@@ -179,6 +183,8 @@ impl AppState {
             lyrics_search: LyricsSearch::default(),
             lyrics_panel_open: false,
             credits: None,
+            download_queue: Vector::new(),
+            download_total: 0,
         }
     }
 }
@@ -338,6 +344,32 @@ impl AppState {
 }
 
 impl AppState {
+    /// Marks tracks as downloading, skipping ones already downloaded or queued.
+    pub fn queue_downloads(&mut self, tracks: &Vector<Arc<Track>>) {
+        for track in tracks {
+            let common = self.common_ctx_mut();
+            if !common.downloaded.contains(&track.id)
+                && common.downloading.insert(track.id).is_none()
+            {
+                self.download_queue.push_back(track.clone());
+                self.download_total += 1;
+            }
+        }
+    }
+
+    /// A track is in the cache now (downloaded or streamed), or failed to download.
+    pub fn finish_download(&mut self, id: TrackId, ok: bool) {
+        let common = self.common_ctx_mut();
+        common.downloading.remove(&id);
+        if ok {
+            common.downloaded.insert(id);
+        }
+        self.download_queue.retain(|t| t.id != id);
+        if self.download_queue.is_empty() {
+            self.download_total = 0;
+        }
+    }
+
     pub fn add_alert(&mut self, message: impl Display, style: AlertStyle) {
         let alert = Alert {
             message: message.to_string().into(),
@@ -634,4 +666,41 @@ impl Alert {
 pub enum AlertStyle {
     Error,
     Info,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::webapi::local_library::{local_track, LocalItem};
+    use psst_core::item_id::ItemIdType;
+
+    fn track(id: u128) -> Arc<Track> {
+        let item = LocalItem {
+            title: id.to_string(),
+            artists: vec![],
+            album: String::new(),
+            duration_ms: None,
+        };
+        let mut track = local_track(&item, None, 1, 1);
+        track.id = TrackId(ItemId::new(id, ItemIdType::Track));
+        Arc::new(track)
+    }
+
+    #[test]
+    fn download_progress() {
+        let mut state = AppState::default_with_config(Config::default());
+        let (a, b, c) = (track(1), track(2), track(3));
+        state.common_ctx_mut().downloaded.insert(c.id);
+        // Duplicates and already downloaded tracks don't count.
+        state.queue_downloads(&[a.clone(), b.clone(), a.clone(), c].into_iter().collect());
+        assert_eq!((state.download_queue.len(), state.download_total), (2, 2));
+        state.finish_download(a.id, true);
+        assert_eq!(state.download_queue.front().unwrap().id, b.id);
+        assert_eq!(state.download_total, 2);
+        state.finish_download(b.id, false);
+        assert_eq!((state.download_queue.len(), state.download_total), (0, 0));
+        assert!(state.common_ctx.downloaded.contains(&a.id));
+        assert!(!state.common_ctx.downloaded.contains(&b.id));
+        assert!(state.common_ctx.downloading.is_empty());
+    }
 }

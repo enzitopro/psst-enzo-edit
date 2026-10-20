@@ -448,19 +448,15 @@ impl PlaybackController {
         let widget_id = ctx.widget_id();
         thread::spawn(move || match tracks() {
             Ok(tracks) => {
-                let ids: Vec<_> = tracks
+                let tracks: Vector<_> = tracks.into_iter().filter(|t| !t.is_local).collect();
+                let items = tracks
                     .iter()
-                    .filter(|t| !t.is_local)
-                    .map(|t| t.id)
-                    .collect();
-                let items = ids
-                    .iter()
-                    .map(|id| PlaybackItem {
-                        item_id: id.0,
+                    .map(|t| PlaybackItem {
+                        item_id: t.id.0,
                         norm_level: NormalizationLevel::None,
                     })
                     .collect();
-                let _ = sink.submit_command(cmd::DOWNLOADING_TRACKS, ids, widget_id);
+                let _ = sink.submit_command(cmd::DOWNLOADING_TRACKS, tracks, widget_id);
                 let _ = sender.send(PlayerEvent::Command(PlayerCommand::Download { items }));
             }
             Err(err) => {
@@ -603,21 +599,12 @@ where
                 ctx.set_handled();
             }
             Event::Command(cmd) if cmd.is(cmd::DOWNLOADING_TRACKS) => {
-                let common = data.common_ctx_mut();
-                for id in cmd.get_unchecked(cmd::DOWNLOADING_TRACKS) {
-                    if !common.downloaded.contains(id) {
-                        common.downloading.insert(*id);
-                    }
-                }
+                data.queue_downloads(cmd.get_unchecked(cmd::DOWNLOADING_TRACKS));
                 ctx.set_handled();
             }
             Event::Command(cmd) if cmd.is(cmd::TRACK_DOWNLOADED) => {
-                let (id, ok) = cmd.get_unchecked(cmd::TRACK_DOWNLOADED);
-                let common = data.common_ctx_mut();
-                common.downloading.remove(id);
-                if *ok {
-                    common.downloaded.insert(*id);
-                }
+                let &(id, ok) = cmd.get_unchecked(cmd::TRACK_DOWNLOADED);
+                data.finish_download(id, ok);
                 ctx.set_handled();
             }
             Event::Command(cmd) if cmd.is(cmd::DOWNLOAD_FINISHED) => {

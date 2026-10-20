@@ -1,5 +1,5 @@
 use crate::data::{Track, TrackId};
-use druid::{Selector, WidgetId};
+use druid::{im::Vector, Selector, WidgetId};
 use psst_core::{item_id::ItemId, player::item::PlaybackItem};
 use std::sync::Arc;
 use std::time::Duration;
@@ -58,7 +58,8 @@ pub const DOWNLOAD_ALBUM: Selector<AlbumLink> = Selector::new("app.download-albu
 /// Tracks found in the cache at startup, tracks queued for download, and the
 /// result for each one.
 pub const DOWNLOADED_TRACKS: Selector<Vec<TrackId>> = Selector::new("app.downloaded-tracks");
-pub const DOWNLOADING_TRACKS: Selector<Vec<TrackId>> = Selector::new("app.downloading-tracks");
+pub const DOWNLOADING_TRACKS: Selector<Vector<Arc<Track>>> =
+    Selector::new("app.downloading-tracks");
 pub const TRACK_DOWNLOADED: Selector<(TrackId, bool)> = Selector::new("app.track-downloaded");
 /// Clear Cache deleted the downloads too.
 pub const DOWNLOADS_CLEARED: Selector = Selector::new("app.downloads-cleared");
