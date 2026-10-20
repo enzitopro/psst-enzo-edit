@@ -68,8 +68,9 @@ impl AudioKeyDispatcher {
         let seq = payload.read_u32::<BE>().unwrap();
 
         if let Some(tx) = self.pending.remove(&seq) {
-            log::error!("audio key error");
-            if tx.send(Err(Error::UnexpectedResponse)).is_err() {
+            let code = payload.read_u16::<BE>().ok();
+            log::error!("audio key error, code {code:?}");
+            if tx.send(Err(Error::AudioKeyRefused)).is_err() {
                 log::warn!("missing receiver for audio key error, seq: {seq}");
             }
         } else {

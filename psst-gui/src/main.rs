@@ -23,7 +23,7 @@ use webapi::{LocalLibrary, WebApi};
 use psst_core::cache::Cache;
 
 use crate::{
-    data::{AppState, Config},
+    data::{AppState, CommonCtx, Config},
     delegate::Delegate,
 };
 
@@ -76,6 +76,7 @@ fn main() {
 
     let paginated_limit = config.paginated_limit;
     let mut state = AppState::default_with_config(config.clone());
+    state.common_ctx_mut().offline_playlists = CommonCtx::load_offline_playlists();
 
     if let Some(cache_dir) = Config::cache_dir() {
         match Cache::new(cache_dir) {

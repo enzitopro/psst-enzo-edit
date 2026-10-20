@@ -5,9 +5,13 @@ use std::{error, fmt, io};
 pub enum Error {
     SessionDisconnected,
     UnexpectedResponse,
+    /// Spotify refuses audio keys for a while after many requests in a row.
+    AudioKeyRefused,
     MediaFileNotFound,
     ProxyUrlInvalid,
-    AuthFailed { code: i32 },
+    AuthFailed {
+        code: i32,
+    },
     ConnectionFailed,
     JsonError(Box<dyn error::Error + Send>),
     InvalidStateError(Box<dyn error::Error + Send + Sync>),
@@ -33,6 +37,7 @@ impl fmt::Display for Error {
         match self {
             Self::SessionDisconnected => write!(f, "Session disconnected"),
             Self::UnexpectedResponse => write!(f, "Unknown server response"),
+            Self::AudioKeyRefused => write!(f, "Spotify refused the audio key (too many requests)"),
             Self::MediaFileNotFound => write!(f, "Audio file not found"),
             Self::ProxyUrlInvalid => write!(f, "Invalid proxy URL"),
             Self::AuthFailed { code } => match code {
@@ -60,8 +65,7 @@ impl fmt::Display for Error {
             | Self::AudioOutputError(err)
             | Self::ScrobblerError(err)
             | Self::AudioProbeError(err) => err.fmt(f),
-            Self::InvalidStateError(err)
-            | Self::UnimplementedError(err) => err.fmt(f),
+            Self::InvalidStateError(err) | Self::UnimplementedError(err) => err.fmt(f),
             Self::IoError(err) => err.fmt(f),
             Self::SendError => write!(f, "Failed to send into a channel"),
             Self::RecvTimeoutError(err) => write!(f, "Channel receive timeout: {err}"),
@@ -90,5 +94,7 @@ impl From<RecvTimeoutError> for Error {
 }
 
 impl From<protobuf::Error> for Error {
-    fn from(err: protobuf::Error) -> Self { Error::InvalidStateError(err.into()) }
+    fn from(err: protobuf::Error) -> Self {
+        Error::InvalidStateError(err.into())
+    }
 }

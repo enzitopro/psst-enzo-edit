@@ -254,7 +254,7 @@ fn player_play_pause_widget() -> impl Widget<Playback> {
     )
 }
 
-fn queue_behavior_widget() -> impl Widget<Playback> {
+pub fn queue_behavior_widget() -> impl Widget<Playback> {
     ViewSwitcher::new(
         |playback: &Playback, _| playback.queue_behavior,
         |behavior, _, _| {

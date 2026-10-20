@@ -19,7 +19,8 @@ pub mod utils;
 
 use std::{
     fmt::Display,
-    mem,
+    fs, mem,
+    path::PathBuf,
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
@@ -28,7 +29,7 @@ use std::{
 };
 
 use druid::{
-    im::{HashSet, Vector},
+    im::{HashMap, HashSet, Vector},
     Data, Lens,
 };
 use psst_core::{item_id::ItemId, session::SessionService};
@@ -115,6 +116,7 @@ impl AppState {
             nav: Nav::Home,
             downloaded: HashSet::new(),
             downloading: HashSet::new(),
+            offline_playlists: HashMap::new(),
         });
         let playback = Playback {
             state: PlaybackState::Stopped,
@@ -613,11 +615,49 @@ pub struct CommonCtx {
     /// Tracks that play without a connection, and the ones being downloaded.
     pub downloaded: HashSet<TrackId>,
     pub downloading: HashSet<TrackId>,
+    /// Playlists downloaded for offline listening: their track count back then,
+    /// and their tracks that can be downloaded (local files can't).
+    pub offline_playlists: HashMap<Arc<str>, (usize, Vector<TrackId>)>,
 }
 
 impl CommonCtx {
     pub fn is_playing(&self, item: &Playable) -> bool {
         matches!(&self.now_playing, Some(i) if i.same(item))
+    }
+
+    /// Whether the whole playlist plays without a connection.  A changed track
+    /// count means tracks were added or removed since it was downloaded.
+    pub fn is_offline(&self, playlist: &Playlist) -> bool {
+        self.offline_playlists
+            .get(&playlist.id)
+            .is_some_and(|(count, tracks)| {
+                playlist.track_count == Some(*count)
+                    && tracks.iter().all(|id| self.downloaded.contains(id))
+            })
+    }
+
+    // In the cache, so Clear Cache forgets them together with the downloads.
+    fn offline_playlists_path() -> Option<PathBuf> {
+        Config::cache_dir().map(|dir| dir.join("offline-playlists.json"))
+    }
+
+    pub fn load_offline_playlists() -> HashMap<Arc<str>, (usize, Vector<TrackId>)> {
+        Self::offline_playlists_path()
+            .and_then(|path| fs::read(path).ok())
+            .and_then(|json| serde_json::from_slice(&json).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn save_offline_playlists(&self) {
+        let Some(path) = Self::offline_playlists_path() else {
+            return;
+        };
+        let result = serde_json::to_vec(&self.offline_playlists)
+            .map_err(|err| err.to_string())
+            .and_then(|json| fs::write(path, json).map_err(|err| err.to_string()));
+        if let Err(err) = result {
+            log::warn!("failed to save offline playlists: {err}");
+        }
     }
 }
 
@@ -702,5 +742,27 @@ mod tests {
         assert!(state.common_ctx.downloaded.contains(&a.id));
         assert!(!state.common_ctx.downloaded.contains(&b.id));
         assert!(state.common_ctx.downloading.is_empty());
+    }
+
+    #[test]
+    fn offline_playlist() {
+        let playlist: Playlist = serde_json::from_value(serde_json::json!({
+            "id": "p", "name": "P", "description": "", "tracks": {"total": 2},
+            "owner": {"id": "u", "display_name": "U"}, "collaborative": false, "public": null
+        }))
+        .unwrap();
+        let mut state = AppState::default_with_config(Config::default());
+        let (a, b) = (track(1).id, track(2).id);
+        let common = state.common_ctx_mut();
+        common
+            .offline_playlists
+            .insert(playlist.id.clone(), (2, [a, b].into_iter().collect()));
+        common.downloaded.insert(a);
+        assert!(!common.is_offline(&playlist));
+        common.downloaded.insert(b);
+        assert!(common.is_offline(&playlist));
+        // A track was added since the download.
+        common.offline_playlists.insert(playlist.id.clone(), (1, [a, b].into_iter().collect()));
+        assert!(!common.is_offline(&playlist));
     }
 }

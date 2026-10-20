@@ -2,15 +2,15 @@ use std::{cell::RefCell, rc::Rc, sync::Arc};
 
 use druid::{
     widget::{Button, Either, Flex, Label, LensWrap, LineBreaking, List, TextBox},
-    Insets, Lens, LensExt, LocalizedString, Menu, MenuItem, Selector, Size, UnitPoint, Widget,
-    WidgetExt, WindowDesc,
+    EventCtx, Insets, Lens, LensExt, LocalizedString, Menu, MenuItem, Selector, Size, UnitPoint,
+    Widget, WidgetExt, WindowDesc,
 };
 
 use crate::{
     cmd,
     data::{
         sort_tracks, AppState, Ctx, Library, Nav, Playlist, PlaylistAddTrack, PlaylistDetail,
-        PlaylistLink, PlaylistRemoveTrack, PlaylistTracks, WithCtx,
+        PlaylistLink, PlaylistRemoveTrack, PlaylistTracks, QueueBehavior, WithCtx,
     },
     error::Error,
     ui::menu,
@@ -18,7 +18,7 @@ use crate::{
     widget::{icons, Async, Empty, MyWidgetExt, RemoteImage, ThemeScope},
 };
 
-use super::{playable, theme, track, utils};
+use super::{playable, playback, theme, track, utils};
 
 pub const LOAD_LIST: Selector = Selector::new("app.playlist.load-list");
 pub const LOAD_DETAIL: Selector<(PlaylistLink, AppState)> =
@@ -56,10 +56,19 @@ pub fn list_widget() -> impl Widget<AppState> {
                     .with_line_break_mode(LineBreaking::WordWrap)
                     .with_text_size(theme::TEXT_SIZE_SMALL)
                     .lens(Ctx::data().then(Playlist::name));
+                // Every track plays without a connection.
+                let offline = Either::new(
+                    |playlist: &WithCtx<Playlist>, _| playlist.ctx.is_offline(&playlist.data),
+                    icons::DOWNLOADED
+                        .scale(theme::ICON_SIZE_TINY)
+                        .padding_left(theme::grid(0.5)),
+                    Empty,
+                );
                 Flex::row()
                     .cross_axis_alignment(druid::widget::CrossAxisAlignment::Center)
                     .with_child(pin)
                     .with_flex_child(name, 1.0)
+                    .with_child(offline)
                     .expand_width()
                     .padding(Insets::uniform_xy(theme::grid(2.0), theme::grid(0.6)))
                     .link()
@@ -411,12 +420,45 @@ pub fn detail_widget() -> impl Widget<AppState> {
 
     let playlist_tracks = async_tracks_widget();
 
+    // Play, and the play mode (shuffle, repeat...) the play button follows.
+    let play_buttons = Flex::row()
+        .with_child(
+            icons::PLAY
+                .scale((theme::grid(3.0), theme::grid(3.0)))
+                .padding(theme::grid(1.0))
+                .link()
+                .circle()
+                .border(theme::GREY_500, 1.0)
+                .on_left_click(|ctx, _, data: &mut AppState, _| play_playlist(ctx, data)),
+        )
+        .with_default_spacer()
+        .with_child(playback::queue_behavior_widget().lens(AppState::playback))
+        .padding((theme::grid(1.0), 0.0));
+
     Flex::column()
         .cross_axis_alignment(CrossAxisAlignment::Start)
         .with_spacer(theme::grid(1.0))
         .with_child(playlist_top)
         .with_spacer(theme::grid(1.0))
+        .with_child(play_buttons)
+        .with_spacer(theme::grid(1.0))
         .with_child(playlist_tracks)
+}
+
+/// Plays the open playlist from the top, or from a random track in shuffle mode.
+fn play_playlist(ctx: &mut EventCtx, data: &AppState) {
+    let Some(tracks) = data.playlist_detail.tracks.resolved() else {
+        return;
+    };
+    let start = match data.playback.queue_behavior {
+        QueueBehavior::Random if !tracks.tracks.is_empty() => {
+            rand::random_range(0..tracks.tracks.len())
+        }
+        _ => 0,
+    };
+    if let Some(payload) = playable::payload(tracks, start) {
+        ctx.submit_command(cmd::PLAY_TRACKS.with(payload));
+    }
 }
 
 fn async_playlist_info_widget() -> impl Widget<AppState> {

@@ -177,6 +177,11 @@ impl PlaybackController {
                         .submit_command(cmd::TRACK_DOWNLOADED, (TrackId(*item_id), *ok), widget_id)
                         .unwrap();
                 }
+                PlayerEvent::DownloadPaused { resume_in } => {
+                    event_sink
+                        .submit_command(cmd::DOWNLOAD_PAUSED, *resume_in, widget_id)
+                        .unwrap();
+                }
                 PlayerEvent::Downloaded { downloaded, failed } => {
                     event_sink
                         .submit_command(
@@ -435,10 +440,13 @@ impl PlaybackController {
         }));
     }
 
-    /// Fetches the track list in the background and hands it to the player to download.
+    /// Fetches the track list in the background and hands it to the player to
+    /// download.  `playlist` is the id and track count of a library playlist, to
+    /// remember it as downloaded.
     fn download(
         &self,
         ctx: &mut EventCtx,
+        playlist: Option<(Arc<str>, usize)>,
         tracks: impl FnOnce() -> Result<Vector<Arc<Track>>, Error> + Send + 'static,
     ) {
         let Some(sender) = self.sender.clone() else {
@@ -449,6 +457,10 @@ impl PlaybackController {
         thread::spawn(move || match tracks() {
             Ok(tracks) => {
                 let tracks: Vector<_> = tracks.into_iter().filter(|t| !t.is_local).collect();
+                if let Some((id, count)) = playlist {
+                    let ids = tracks.iter().map(|t| t.id).collect();
+                    let _ = sink.submit_command(cmd::OFFLINE_PLAYLIST, (id, count, ids), widget_id);
+                }
                 let items = tracks
                     .iter()
                     .map(|t| PlaybackItem {
@@ -573,7 +585,16 @@ where
                     "Downloading \"{}\" for offline listening…",
                     link.name
                 ));
-                self.download(ctx, move || WebApi::global().get_playlist_tracks(&link.id));
+                let track_count = data
+                    .library
+                    .playlists
+                    .resolved()
+                    .and_then(|playlists| playlists.iter().find(|p| p.id == link.id))
+                    .and_then(|playlist| playlist.track_count);
+                let playlist = track_count.map(|count| (link.id.clone(), count));
+                self.download(ctx, playlist, move || {
+                    WebApi::global().get_playlist_tracks(&link.id)
+                });
                 ctx.set_handled();
             }
             Event::Command(cmd) if cmd.is(cmd::DOWNLOAD_ALBUM) => {
@@ -582,7 +603,7 @@ where
                     "Downloading \"{}\" for offline listening…",
                     link.name
                 ));
-                self.download(ctx, move || {
+                self.download(ctx, None, move || {
                     Ok(WebApi::global().get_album(&link.id)?.data.tracks.clone())
                 });
                 ctx.set_handled();
@@ -592,6 +613,13 @@ where
                 data.common_ctx_mut()
                     .downloaded
                     .extend(tracks.iter().copied());
+                ctx.set_handled();
+            }
+            Event::Command(cmd) if cmd.is(cmd::OFFLINE_PLAYLIST) => {
+                let (id, count, tracks) = cmd.get_unchecked(cmd::OFFLINE_PLAYLIST).clone();
+                let common = data.common_ctx_mut();
+                common.offline_playlists.insert(id, (count, tracks));
+                common.save_offline_playlists();
                 ctx.set_handled();
             }
             Event::Command(cmd) if cmd.is(cmd::DOWNLOADS_CLEARED) => {
@@ -605,6 +633,16 @@ where
             Event::Command(cmd) if cmd.is(cmd::TRACK_DOWNLOADED) => {
                 let &(id, ok) = cmd.get_unchecked(cmd::TRACK_DOWNLOADED);
                 data.finish_download(id, ok);
+                ctx.set_handled();
+            }
+            Event::Command(cmd) if cmd.is(cmd::DOWNLOAD_PAUSED) => {
+                let minutes = cmd
+                    .get_unchecked(cmd::DOWNLOAD_PAUSED)
+                    .as_secs()
+                    .div_ceil(60);
+                data.info_alert(format!(
+                    "Spotify is limiting downloads, continuing in {minutes} min"
+                ));
                 ctx.set_handled();
             }
             Event::Command(cmd) if cmd.is(cmd::DOWNLOAD_FINISHED) => {

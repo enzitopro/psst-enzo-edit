@@ -12,9 +12,8 @@ use druid::{
 use crate::{
     cmd,
     data::{
-        CommonCtx, FindQuery, MatchFindQuery, Playable, PlaybackOrigin,
-        PlaybackPayload, PlaylistTracks, Recommendations, SavedTracks, SearchResults, ShowEpisodes,
-        Track, WithCtx,
+        CommonCtx, FindQuery, MatchFindQuery, Playable, PlaybackOrigin, PlaybackPayload,
+        PlaylistTracks, Recommendations, SavedTracks, SearchResults, ShowEpisodes, Track, WithCtx,
     },
     ui::theme,
 };
@@ -282,6 +281,26 @@ where
     }
 }
 
+/// Plays `data` from the item at `clicked`.  Local items without a file are left
+/// out, and the position shifts to account for the ones skipped before it.
+pub fn payload(data: &impl PlayableIter, clicked: usize) -> Option<PlaybackPayload> {
+    let mut items = Vector::new();
+    let mut position = None;
+    data.for_each(|item, index| {
+        if item.is_playable() {
+            if position.is_none() && index >= clicked {
+                position = Some(items.len());
+            }
+            items.push_back(item);
+        }
+    });
+    (!items.is_empty()).then(|| PlaybackPayload {
+        items,
+        origin: data.origin(),
+        position: position.unwrap_or(0),
+    })
+}
+
 struct PlayController;
 
 impl<T, W> Controller<WithCtx<T>, W> for PlayController
@@ -300,24 +319,7 @@ where
         match event {
             Event::Notification(note) => {
                 if let Some(&clicked) = note.get(cmd::PLAY) {
-                    // Leave out local items without a file, and shift the
-                    // position to account for the ones skipped before it.
-                    let mut items = Vector::new();
-                    let mut position = None;
-                    data.data.for_each(|item, index| {
-                        if item.is_playable() {
-                            if position.is_none() && index >= clicked {
-                                position = Some(items.len());
-                            }
-                            items.push_back(item);
-                        }
-                    });
-                    if !items.is_empty() {
-                        let payload = PlaybackPayload {
-                            items,
-                            origin: data.data.origin(),
-                            position: position.unwrap_or(0),
-                        };
+                    if let Some(payload) = payload(&data.data, clicked) {
                         ctx.submit_command(cmd::PLAY_TRACKS.with(payload));
                     }
                     ctx.set_handled();

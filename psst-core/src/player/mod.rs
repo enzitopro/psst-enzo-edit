@@ -105,6 +105,7 @@ impl Player {
             | PlayerEvent::LoadingFailed { .. }
             | PlayerEvent::Downloaded { .. }
             | PlayerEvent::ItemDownloaded { .. }
+            | PlayerEvent::DownloadPaused { .. }
             | PlayerEvent::Playing { .. }
             | PlayerEvent::Pausing { .. }
             | PlayerEvent::Resuming { .. }
@@ -324,6 +325,10 @@ impl Player {
     fn download(&self, items: Vec<PlaybackItem>) {
         const ATTEMPTS: usize = 3;
         const RETRY_AFTER: Duration = Duration::from_secs(5);
+        // After a few dozen tracks Spotify refuses audio keys for minutes, so wait
+        // it out.  The waits restart after each success; once they run out, the
+        // rest of the items fail right away.
+        const KEY_WAITS_SECS: [u64; 6] = [60, 120, 240, 300, 300, 300];
 
         let sender = self.sender.clone();
         let session = self.session.clone();
@@ -332,11 +337,26 @@ impl Player {
         let config = self.config.clone();
         thread::spawn(move || {
             let mut failed = 0;
+            let mut key_waits = KEY_WAITS_SECS.iter();
             for item in &items {
                 let mut attempt = 1;
                 let ok = loop {
                     match item.download(&session, &cdn, &cache, &config) {
-                        Ok(()) => break true,
+                        Ok(()) => {
+                            key_waits = KEY_WAITS_SECS.iter();
+                            break true;
+                        }
+                        Err(Error::AudioKeyRefused) => {
+                            let Some(&secs) = key_waits.next() else {
+                                failed += 1;
+                                break false;
+                            };
+                            log::warn!("audio key refused, resuming downloads in {secs}s");
+                            let _ = sender.send(PlayerEvent::DownloadPaused {
+                                resume_in: Duration::from_secs(secs),
+                            });
+                            thread::sleep(Duration::from_secs(secs));
+                        }
                         Err(err)
                             if attempt == ATTEMPTS || matches!(err, Error::MediaFileNotFound) =>
                         {
@@ -560,6 +580,10 @@ pub enum PlayerEvent {
     ItemDownloaded {
         item_id: ItemId,
         ok: bool,
+    },
+    /// Spotify refused an audio key, downloads continue after a wait.
+    DownloadPaused {
+        resume_in: Duration,
     },
     /// A `Download` command has finished.
     Downloaded {
