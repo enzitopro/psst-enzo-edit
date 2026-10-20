@@ -82,6 +82,23 @@ impl PlaybackItem {
     }
 }
 
+/// Cached tracks that play without a connection: downloaded ones, and the ones
+/// streamed to the end.
+pub fn downloaded_tracks(cache: &CacheHandle, config: &PlaybackConfig) -> Vec<ItemId> {
+    // Can't connect, so everything has to come from the cache.
+    let offline = SessionService::empty();
+    cache
+        .track_ids()
+        .into_iter()
+        .filter(|&item_id| {
+            load_media_path(item_id, &offline, cache, config).is_ok_and(|path| {
+                cache.audio_file_path(path.file_id).exists()
+                    && cache.get_audio_key(path.item_id, path.file_id).is_some()
+            })
+        })
+        .collect()
+}
+
 fn load_media_path(
     item_id: ItemId,
     session: &SessionService,

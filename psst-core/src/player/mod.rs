@@ -103,6 +103,7 @@ impl Player {
             PlayerEvent::Loading { .. }
             | PlayerEvent::LoadingFailed { .. }
             | PlayerEvent::Downloaded { .. }
+            | PlayerEvent::ItemDownloaded { .. }
             | PlayerEvent::Playing { .. }
             | PlayerEvent::Pausing { .. }
             | PlayerEvent::Resuming { .. }
@@ -325,16 +326,24 @@ impl Player {
             let mut failed = 0;
             for item in &items {
                 let mut attempt = 1;
-                while let Err(err) = item.download(&session, &cdn, &cache, &config) {
-                    if attempt == ATTEMPTS || matches!(err, Error::MediaFileNotFound) {
-                        log::error!("failed to download {:?}: {err}", item.item_id);
-                        failed += 1;
-                        break;
+                let ok = loop {
+                    match item.download(&session, &cdn, &cache, &config) {
+                        Ok(()) => break true,
+                        Err(err)
+                            if attempt == ATTEMPTS || matches!(err, Error::MediaFileNotFound) =>
+                        {
+                            log::error!("failed to download {:?}: {err}", item.item_id);
+                            failed += 1;
+                            break false;
+                        }
+                        Err(err) => {
+                            log::warn!("download failed, retrying: {err}");
+                            attempt += 1;
+                            thread::sleep(RETRY_AFTER);
+                        }
                     }
-                    log::warn!("download failed, retrying: {err}");
-                    attempt += 1;
-                    thread::sleep(RETRY_AFTER);
-                }
+                };
+                let _ = sender.send(PlayerEvent::ItemDownloaded { item: *item, ok });
             }
             let _ = sender.send(PlayerEvent::Downloaded {
                 downloaded: items.len() - failed,
@@ -534,6 +543,11 @@ pub enum PlayerEvent {
     LoadingFailed {
         item: PlaybackItem,
         error: String,
+    },
+    /// An item of a `Download` command is in the cache, or failed to download.
+    ItemDownloaded {
+        item: PlaybackItem,
+        ok: bool,
     },
     /// A `Download` command has finished.
     Downloaded {

@@ -7,7 +7,7 @@ use std::{
 use crate::{
     audio::decrypt::AudioKey,
     error::Error,
-    item_id::{FileId, ItemId},
+    item_id::{FileId, ItemId, ItemIdType},
 };
 
 use librespot_protocol::metadata::{Episode, Track};
@@ -69,6 +69,19 @@ impl Cache {
         log::debug!("saving track to cache: {item_id:?}");
         fs::write(self.track_path(item_id), track.write_to_bytes()?)?;
         Ok(())
+    }
+
+    /// All tracks with cached metadata.
+    pub fn track_ids(&self) -> Vec<ItemId> {
+        let Ok(entries) = fs::read_dir(self.base.join("track")) else {
+            return Vec::new();
+        };
+        entries
+            .filter_map(|entry| {
+                let name = entry.ok()?.file_name();
+                ItemId::from_base62(name.to_str()?, ItemIdType::Track)
+            })
+            .collect()
     }
 
     fn track_path(&self, item_id: ItemId) -> PathBuf {

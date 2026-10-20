@@ -89,6 +89,21 @@ pub fn playable_widget(display: Display) -> impl Widget<PlayRow<Arc<Track>>> {
             Empty,
         );
         major.add_child(local_icon);
+        // Filled once the track plays without a connection, outlined while downloading.
+        major.add_child(Either::new(
+            |row: &PlayRow<Arc<Track>>, _| row.ctx.downloaded.contains(&row.item.id),
+            icons::DOWNLOADED
+                .scale(theme::ICON_SIZE_SMALL)
+                .padding_right(theme::grid(0.5)),
+            Either::new(
+                |row: &PlayRow<Arc<Track>>, _| row.ctx.downloading.contains(&row.item.id),
+                icons::DOWNLOADING
+                    .scale(theme::ICON_SIZE_SMALL)
+                    .with_color(theme::GREY_400)
+                    .padding_right(theme::grid(0.5)),
+                Empty,
+            ),
+        ));
         let track_name = Label::raw()
             .with_font(theme::UI_FONT_MEDIUM)
             .with_line_break_mode(LineBreaking::Clip)

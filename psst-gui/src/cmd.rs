@@ -1,4 +1,4 @@
-use crate::data::Track;
+use crate::data::{Track, TrackId};
 use druid::{Selector, WidgetId};
 use psst_core::{item_id::ItemId, player::item::PlaybackItem};
 use std::sync::Arc;
@@ -55,6 +55,11 @@ pub const PLAYBACK_SKIPPED: Selector<(ItemId, String)> = Selector::new("app.play
 // Offline downloads: save the tracks into the cache, so they play without a connection.
 pub const DOWNLOAD_PLAYLIST: Selector<PlaylistLink> = Selector::new("app.download-playlist");
 pub const DOWNLOAD_ALBUM: Selector<AlbumLink> = Selector::new("app.download-album");
+/// Tracks found in the cache at startup, tracks queued for download, and the
+/// result for each one.
+pub const DOWNLOADED_TRACKS: Selector<Vec<TrackId>> = Selector::new("app.downloaded-tracks");
+pub const DOWNLOADING_TRACKS: Selector<Vec<TrackId>> = Selector::new("app.downloading-tracks");
+pub const TRACK_DOWNLOADED: Selector<(TrackId, bool)> = Selector::new("app.track-downloaded");
 /// Tracks saved and tracks that failed, or why the download couldn't start.
 pub const DOWNLOAD_FINISHED: Selector<Result<(usize, usize), String>> =
     Selector::new("app.download-finished");
@@ -90,5 +95,4 @@ pub const LOAD_TRACK_CREDITS: Selector<Arc<Track>> = Selector::new("app.credits-
 pub const SHOW_ARTWORK: Selector = Selector::new("app.show-artwork");
 
 // Local files
-pub const RESCAN_LOCAL_FILES: Selector<LocalScanRequest> =
-    Selector::new("app.local-files.rescan");
+pub const RESCAN_LOCAL_FILES: Selector<LocalScanRequest> = Selector::new("app.local-files.rescan");

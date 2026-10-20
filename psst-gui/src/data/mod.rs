@@ -109,6 +109,8 @@ impl AppState {
             library: Arc::clone(&library),
             show_track_cover: config.show_track_cover,
             nav: Nav::Home,
+            downloaded: HashSet::new(),
+            downloading: HashSet::new(),
         });
         let playback = Playback {
             state: PlaybackState::Stopped,
@@ -576,6 +578,9 @@ pub struct CommonCtx {
     pub library: Arc<Library>,
     pub show_track_cover: bool,
     pub nav: Nav,
+    /// Tracks that play without a connection, and the ones being downloaded.
+    pub downloaded: HashSet<TrackId>,
+    pub downloading: HashSet<TrackId>,
 }
 
 impl CommonCtx {

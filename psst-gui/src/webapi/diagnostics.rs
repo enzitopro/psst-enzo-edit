@@ -556,15 +556,21 @@ fn diagnostics_download_for_offline() {
     sender
         .send(PlayerEvent::Command(PlayerCommand::Download { items: items.clone() }))
         .unwrap();
+    let mut reported = 0;
     let (downloaded, failed) = loop {
         let event = receiver.recv_timeout(Duration::from_secs(120)).expect("download finished");
-        if let PlayerEvent::Downloaded { downloaded, failed } = event {
-            break (downloaded, failed);
+        match event {
+            PlayerEvent::Downloaded { downloaded, failed } => break (downloaded, failed),
+            PlayerEvent::ItemDownloaded { ok, .. } => reported += usize::from(ok),
+            event => player.handle(event),
         }
-        player.handle(event);
     };
     println!("downloaded {downloaded}, failed {failed} in {:?}", started.elapsed());
-    assert_eq!((downloaded, failed), (items.len(), 0));
+    assert_eq!((downloaded, failed, reported), (items.len(), 0, items.len()));
+
+    // The startup scan finds them.
+    let found = psst_core::player::item::downloaded_tracks(&cache, &config.playback());
+    assert!(items.iter().all(|item| found.contains(&item.item_id)));
 
     // No session config: any network access fails, so these must come from the cache.
     let offline = SessionService::empty();

@@ -15,7 +15,10 @@ use psst_core::{
     cache::Cache,
     cdn::Cdn,
     lastfm::LastFmClient,
-    player::{item::PlaybackItem, PlaybackConfig, Player, PlayerCommand, PlayerEvent},
+    player::{
+        item::{downloaded_tracks, PlaybackItem},
+        PlaybackConfig, Player, PlayerCommand, PlayerEvent,
+    },
     session::SessionService,
 };
 use rustfm_scrobble::Scrobbler;
@@ -29,7 +32,7 @@ use crate::{
     data::Nav,
     data::{
         AppState, Config, NowPlaying, Playable, Playback, PlaybackOrigin, PlaybackState,
-        QueueBehavior, QueueEntry, Track,
+        QueueBehavior, QueueEntry, Track, TrackId,
     },
     discord::{DiscordPresence, Presence},
     error::Error,
@@ -98,10 +101,21 @@ impl PlaybackController {
         let output = DefaultAudioOutput::open().unwrap();
         let cache_dir = Config::cache_dir().unwrap();
         let proxy_url = Config::proxy();
+        let cache = Cache::new(cache_dir).unwrap();
+        thread::spawn({
+            let (cache, config, event_sink) = (cache.clone(), config.clone(), event_sink.clone());
+            move || {
+                let tracks: Vec<_> = downloaded_tracks(&cache, &config)
+                    .into_iter()
+                    .map(TrackId)
+                    .collect();
+                let _ = event_sink.submit_command(cmd::DOWNLOADED_TRACKS, tracks, widget_id);
+            }
+        });
         let player = Player::new(
             session.clone(),
             Cdn::new(session, proxy_url.as_deref()).unwrap(),
-            Cache::new(cache_dir).unwrap(),
+            cache,
             config,
             &output,
         );
@@ -156,6 +170,15 @@ impl PlaybackController {
                 PlayerEvent::Stopped => {
                     event_sink
                         .submit_command(cmd::PLAYBACK_STOPPED, (), widget_id)
+                        .unwrap();
+                }
+                PlayerEvent::ItemDownloaded { item, ok } => {
+                    event_sink
+                        .submit_command(
+                            cmd::TRACK_DOWNLOADED,
+                            (TrackId(item.item_id), *ok),
+                            widget_id,
+                        )
                         .unwrap();
                 }
                 PlayerEvent::Downloaded { downloaded, failed } => {
@@ -429,13 +452,19 @@ impl PlaybackController {
         let widget_id = ctx.widget_id();
         thread::spawn(move || match tracks() {
             Ok(tracks) => {
-                let items = tracks
+                let ids: Vec<_> = tracks
                     .iter()
-                    .map(|track| PlaybackItem {
-                        item_id: track.id.0,
+                    .filter(|t| !t.is_local)
+                    .map(|t| t.id)
+                    .collect();
+                let items = ids
+                    .iter()
+                    .map(|id| PlaybackItem {
+                        item_id: id.0,
                         norm_level: NormalizationLevel::None,
                     })
                     .collect();
+                let _ = sink.submit_command(cmd::DOWNLOADING_TRACKS, ids, widget_id);
                 let _ = sender.send(PlayerEvent::Command(PlayerCommand::Download { items }));
             }
             Err(err) => {
@@ -564,6 +593,31 @@ where
                 self.download(ctx, move || {
                     Ok(WebApi::global().get_album(&link.id)?.data.tracks.clone())
                 });
+                ctx.set_handled();
+            }
+            Event::Command(cmd) if cmd.is(cmd::DOWNLOADED_TRACKS) => {
+                let tracks = cmd.get_unchecked(cmd::DOWNLOADED_TRACKS);
+                data.common_ctx_mut()
+                    .downloaded
+                    .extend(tracks.iter().copied());
+                ctx.set_handled();
+            }
+            Event::Command(cmd) if cmd.is(cmd::DOWNLOADING_TRACKS) => {
+                let common = data.common_ctx_mut();
+                for id in cmd.get_unchecked(cmd::DOWNLOADING_TRACKS) {
+                    if !common.downloaded.contains(id) {
+                        common.downloading.insert(*id);
+                    }
+                }
+                ctx.set_handled();
+            }
+            Event::Command(cmd) if cmd.is(cmd::TRACK_DOWNLOADED) => {
+                let (id, ok) = cmd.get_unchecked(cmd::TRACK_DOWNLOADED);
+                let common = data.common_ctx_mut();
+                common.downloading.remove(id);
+                if *ok {
+                    common.downloaded.insert(*id);
+                }
                 ctx.set_handled();
             }
             Event::Command(cmd) if cmd.is(cmd::DOWNLOAD_FINISHED) => {

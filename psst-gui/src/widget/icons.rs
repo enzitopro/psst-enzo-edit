@@ -178,6 +178,20 @@ pub static LOCAL_FILE: SvgIcon = SvgIcon {
     op: PaintOp::Fill,
 };
 
+// Material Icons - arrow_circle_down, marks tracks that play without a connection.
+pub static DOWNLOADED: SvgIcon = SvgIcon {
+    svg_path: "M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 15l-5-5h3V8h4v4h3l-5 5z",
+    svg_size: Size::new(24.0, 24.0),
+    op: PaintOp::Fill,
+};
+
+// Material Icons - arrow_circle_down (outlined), marks tracks being downloaded.
+pub static DOWNLOADING: SvgIcon = SvgIcon {
+    svg_path: "M12 4c4.41 0 8 3.59 8 8s-3.59 8-8 8-8-3.59-8-8 3.59-8 8-8m0-2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 10V8h-2v4H8l4 4 4-4h-3z",
+    svg_size: Size::new(24.0, 24.0),
+    op: PaintOp::Fill,
+};
+
 // Push pin, marks playlists pinned in the official client.
 pub static PIN: SvgIcon = SvgIcon {
     svg_path: "M14.6 2.4L21.6 9.4L20.2 10.8L18.8 10.1L15.1 13.8L15.8 18L14.4 19.4L10.2 15.2L4.4 21H3V19.6L8.8 13.8L4.6 9.6L6 8.2L10.2 8.9L13.9 5.2L13.2 3.8L14.6 2.4Z",
@@ -272,5 +286,17 @@ impl<T> Widget<T> for Icon {
                 PaintOp::Fill => ctx.fill(&self.bez_path, &color),
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn download_icons_parse() {
+        // `scale` panics on SVG paths kurbo can't parse.
+        DOWNLOADED.scale(Size::new(14.0, 14.0));
+        DOWNLOADING.scale(Size::new(14.0, 14.0));
     }
 }
