@@ -217,6 +217,12 @@ fn album_menu(album: &Arc<Album>, library: &Arc<Library>) -> Menu<AppState> {
         )
         .command(cmd::COPY.with(album.url())),
     );
+    menu = menu.entry(
+        MenuItem::new(
+            LocalizedString::new("menu-item-download").with_placeholder("Download for Offline"),
+        )
+        .command(cmd::DOWNLOAD_ALBUM.with(album.link())),
+    );
 
     menu = menu.separator();
 

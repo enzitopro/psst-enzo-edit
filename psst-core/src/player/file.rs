@@ -9,6 +9,7 @@ use std::{
 };
 
 use symphonia::core::codecs::CodecType;
+use tempfile::NamedTempFile;
 
 use crate::{
     audio::{
@@ -139,6 +140,35 @@ impl MediaFile {
         }
     }
 
+    /// Downloads the whole (still encrypted) file into the cache, so it plays without
+    /// a connection.  Goes through a temporary file, so a failed download never leaves
+    /// a truncated file that would be played as complete.
+    pub fn download(path: MediaPath, cdn: &CdnHandle, cache: &CacheHandle) -> Result<(), Error> {
+        // Small requests, so each one fits the HTTP client's 5s timeout on a slow link.
+        const CHUNK_LENGTH: u64 = 512 * 1024;
+
+        let cached_path = cache.audio_file_path(path.file_id);
+        if cached_path.exists() {
+            return Ok(());
+        }
+        let url = cdn.resolve_audio_file_url(path.file_id)?;
+        let mut file =
+            NamedTempFile::new_in(cached_path.parent().expect("cache files are in a folder"))?;
+        let mut total_length = u64::MAX; // Known after the first response.
+        let mut offset = 0;
+        while offset < total_length {
+            let length = CHUNK_LENGTH.min(total_length - offset);
+            let (total, mut body) = cdn.fetch_file_range(&url.url, offset, length)?;
+            total_length = total;
+            match io::copy(&mut body, &mut file)? {
+                0 => return Err(Error::UnexpectedResponse),
+                written => offset += written,
+            }
+        }
+        file.persist(&cached_path).map_err(|err| err.error)?;
+        Ok(())
+    }
+
     pub fn local(path: MediaPath) -> Self {
         Self::Local { path }
     }
@@ -177,9 +207,7 @@ impl MediaFile {
     /// Local files are plain, unencrypted audio files of any supported format,
     /// without the Spotify header.  Normalization data comes from ReplayGain
     /// tags, if the file has them.
-    pub fn local_audio_source(
-        &self,
-    ) -> Result<(AudioDecoder, Option<NormalizationData>), Error> {
+    pub fn local_audio_source(&self) -> Result<(AudioDecoder, Option<NormalizationData>), Error> {
         let file_path = self.path().item_id.to_local();
         let reader = fs::File::open(&file_path)?;
         let extension = file_path.extension().and_then(|ext| ext.to_str());

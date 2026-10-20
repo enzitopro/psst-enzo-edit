@@ -5,7 +5,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::{
-    data::{config::LocalScanRequest, Nav, PlaybackPayload, QueueBehavior, QueueEntry},
+    data::{
+        config::LocalScanRequest, AlbumLink, Nav, PlaybackPayload, PlaylistLink, QueueBehavior,
+        QueueEntry,
+    },
     ui::find::Find,
 };
 
@@ -48,6 +51,13 @@ pub const PLAYBACK_BLOCKED: Selector = Selector::new("app.playback-blocked");
 pub const PLAYBACK_STOPPED: Selector = Selector::new("app.playback-stopped");
 /// A track failed to load and was skipped, with the reason.
 pub const PLAYBACK_SKIPPED: Selector<(ItemId, String)> = Selector::new("app.playback-skipped");
+
+// Offline downloads: save the tracks into the cache, so they play without a connection.
+pub const DOWNLOAD_PLAYLIST: Selector<PlaylistLink> = Selector::new("app.download-playlist");
+pub const DOWNLOAD_ALBUM: Selector<AlbumLink> = Selector::new("app.download-album");
+/// Tracks saved and tracks that failed, or why the download couldn't start.
+pub const DOWNLOAD_FINISHED: Selector<Result<(usize, usize), String>> =
+    Selector::new("app.download-finished");
 
 // Playback control
 pub const PLAY: Selector<usize> = Selector::new("app.play-index");

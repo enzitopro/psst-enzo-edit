@@ -562,6 +562,12 @@ fn playlist_menu_ctx(playlist: &WithCtx<Playlist>) -> Menu<AppState> {
         )
         .command(cmd::COPY.with(playlist.url())),
     );
+    menu = menu.entry(
+        MenuItem::new(
+            LocalizedString::new("menu-item-download").with_placeholder("Download for Offline"),
+        )
+        .command(cmd::DOWNLOAD_PLAYLIST.with(playlist.link())),
+    );
 
     if library.contains_playlist(playlist) {
         let created_by_user = library.is_created_by_user(playlist);

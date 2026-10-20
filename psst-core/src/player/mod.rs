@@ -102,6 +102,7 @@ impl Player {
             PlayerEvent::EndOfTrack => self.handle_end_of_track(),
             PlayerEvent::Loading { .. }
             | PlayerEvent::LoadingFailed { .. }
+            | PlayerEvent::Downloaded { .. }
             | PlayerEvent::Playing { .. }
             | PlayerEvent::Pausing { .. }
             | PlayerEvent::Resuming { .. }
@@ -115,6 +116,7 @@ impl Player {
             PlayerCommand::LoadQueue { items, position } => self.load_queue(items, position),
             PlayerCommand::LoadAndPlay { item } => self.load_and_play(item),
             PlayerCommand::Preload { item } => self.preload(item),
+            PlayerCommand::Download { items } => self.download(items),
             PlayerCommand::Pause => self.pause(),
             PlayerCommand::Resume => self.resume(),
             PlayerCommand::PauseOrResume => self.pause_or_resume(),
@@ -307,6 +309,40 @@ impl Player {
         })
     }
 
+    /// Downloads `items` into the cache one by one in a background thread, retrying
+    /// failures (usually dropped connections), and reports back with
+    /// `PlayerEvent::Downloaded`.
+    fn download(&self, items: Vec<PlaybackItem>) {
+        const ATTEMPTS: usize = 3;
+        const RETRY_AFTER: Duration = Duration::from_secs(5);
+
+        let sender = self.sender.clone();
+        let session = self.session.clone();
+        let cdn = self.cdn.clone();
+        let cache = self.cache.clone();
+        let config = self.config.clone();
+        thread::spawn(move || {
+            let mut failed = 0;
+            for item in &items {
+                let mut attempt = 1;
+                while let Err(err) = item.download(&session, &cdn, &cache, &config) {
+                    if attempt == ATTEMPTS || matches!(err, Error::MediaFileNotFound) {
+                        log::error!("failed to download {:?}: {err}", item.item_id);
+                        failed += 1;
+                        break;
+                    }
+                    log::warn!("download failed, retrying: {err}");
+                    attempt += 1;
+                    thread::sleep(RETRY_AFTER);
+                }
+            }
+            let _ = sender.send(PlayerEvent::Downloaded {
+                downloaded: items.len() - failed,
+                failed,
+            });
+        });
+    }
+
     fn preload(&mut self, item: PlaybackItem) {
         if self.is_in_preload(item) {
             return;
@@ -454,6 +490,10 @@ pub enum PlayerCommand {
     Preload {
         item: PlaybackItem,
     },
+    /// Save items into the cache, so they play without a connection.
+    Download {
+        items: Vec<PlaybackItem>,
+    },
     Pause,
     Resume,
     PauseOrResume,
@@ -494,6 +534,11 @@ pub enum PlayerEvent {
     LoadingFailed {
         item: PlaybackItem,
         error: String,
+    },
+    /// A `Download` command has finished.
+    Downloaded {
+        downloaded: usize,
+        failed: usize,
     },
     /// Next item in queue has been either successfully preloaded or failed to
     /// preload.

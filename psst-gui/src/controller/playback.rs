@@ -1,4 +1,5 @@
 use std::{
+    sync::Arc,
     thread::{self, JoinHandle},
     time::Duration,
 };
@@ -26,12 +27,14 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::{
     cmd,
     data::Nav,
-    discord::{DiscordPresence, Presence},
     data::{
         AppState, Config, NowPlaying, Playable, Playback, PlaybackOrigin, PlaybackState,
-        QueueBehavior, QueueEntry,
+        QueueBehavior, QueueEntry, Track,
     },
+    discord::{DiscordPresence, Presence},
+    error::Error,
     ui::lyrics,
+    webapi::WebApi,
 };
 
 pub struct PlaybackController {
@@ -153,6 +156,15 @@ impl PlaybackController {
                 PlayerEvent::Stopped => {
                     event_sink
                         .submit_command(cmd::PLAYBACK_STOPPED, (), widget_id)
+                        .unwrap();
+                }
+                PlayerEvent::Downloaded { downloaded, failed } => {
+                    event_sink
+                        .submit_command(
+                            cmd::DOWNLOAD_FINISHED,
+                            Ok((*downloaded, *failed)),
+                            widget_id,
+                        )
                         .unwrap();
                 }
                 PlayerEvent::LoadingFailed { item, error } => {
@@ -404,6 +416,35 @@ impl PlaybackController {
         }));
     }
 
+    /// Fetches the track list in the background and hands it to the player to download.
+    fn download(
+        &self,
+        ctx: &mut EventCtx,
+        tracks: impl FnOnce() -> Result<Vector<Arc<Track>>, Error> + Send + 'static,
+    ) {
+        let Some(sender) = self.sender.clone() else {
+            return;
+        };
+        let sink = ctx.get_external_handle();
+        let widget_id = ctx.widget_id();
+        thread::spawn(move || match tracks() {
+            Ok(tracks) => {
+                let items = tracks
+                    .iter()
+                    .map(|track| PlaybackItem {
+                        item_id: track.id.0,
+                        norm_level: NormalizationLevel::None,
+                    })
+                    .collect();
+                let _ = sender.send(PlayerEvent::Command(PlayerCommand::Download { items }));
+            }
+            Err(err) => {
+                let _ =
+                    sink.submit_command(cmd::DOWNLOAD_FINISHED, Err(err.to_string()), widget_id);
+            }
+        });
+    }
+
     fn set_queue_behavior(&mut self, behavior: QueueBehavior) {
         self.send(PlayerEvent::Command(PlayerCommand::SetQueueBehavior {
             behavior: match behavior {
@@ -503,6 +544,38 @@ where
                     .map(|queued| queued.item.name().to_string())
                     .unwrap_or_else(|| "a track".to_string());
                 data.error_alert(format!("Couldn't play \"{name}\", skipped it: {error}"));
+                ctx.set_handled();
+            }
+            Event::Command(cmd) if cmd.is(cmd::DOWNLOAD_PLAYLIST) => {
+                let link = cmd.get_unchecked(cmd::DOWNLOAD_PLAYLIST).clone();
+                data.info_alert(format!(
+                    "Downloading \"{}\" for offline listening…",
+                    link.name
+                ));
+                self.download(ctx, move || WebApi::global().get_playlist_tracks(&link.id));
+                ctx.set_handled();
+            }
+            Event::Command(cmd) if cmd.is(cmd::DOWNLOAD_ALBUM) => {
+                let link = cmd.get_unchecked(cmd::DOWNLOAD_ALBUM).clone();
+                data.info_alert(format!(
+                    "Downloading \"{}\" for offline listening…",
+                    link.name
+                ));
+                self.download(ctx, move || {
+                    Ok(WebApi::global().get_album(&link.id)?.data.tracks.clone())
+                });
+                ctx.set_handled();
+            }
+            Event::Command(cmd) if cmd.is(cmd::DOWNLOAD_FINISHED) => {
+                match cmd.get_unchecked(cmd::DOWNLOAD_FINISHED) {
+                    Ok((downloaded, 0)) => data.info_alert(format!(
+                        "Downloaded {downloaded} tracks, they now play without a connection"
+                    )),
+                    Ok((downloaded, failed)) => data.error_alert(format!(
+                        "Downloaded {downloaded} tracks, {failed} failed (download again to retry them)"
+                    )),
+                    Err(err) => data.error_alert(format!("Couldn't download: {err}")),
+                }
                 ctx.set_handled();
             }
             Event::Command(cmd) if cmd.is(cmd::PLAY_TRACKS) => {
@@ -636,7 +709,8 @@ where
         if self.startup {
             self.startup = false;
             self.scrobbler = init_scrobbler_instance(data);
-            self.discord.configure(data.config.discord_presence_app_id());
+            self.discord
+                .configure(data.config.discord_presence_app_id());
         }
         child.lifecycle(ctx, event, data, env);
     }

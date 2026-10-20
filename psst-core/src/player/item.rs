@@ -63,6 +63,23 @@ impl PlaybackItem {
             norm_factor,
         })
     }
+
+    /// Fetches everything needed to play the item into the cache, so it plays
+    /// without a connection.  Local files are always available.
+    pub fn download(
+        &self,
+        session: &SessionService,
+        cdn: &CdnHandle,
+        cache: &CacheHandle,
+        config: &PlaybackConfig,
+    ) -> Result<(), Error> {
+        if matches!(self.item_id.id_type, ItemIdType::LocalFile) {
+            return Ok(());
+        }
+        let path = load_media_path(self.item_id, session, cache, config)?;
+        load_audio_key(&path, session, cache)?;
+        MediaFile::download(path, cdn, cache)
+    }
 }
 
 fn load_media_path(

@@ -512,6 +512,75 @@ fn diagnostics_play_spotify_track() {
     assert!(playing && last_position >= Duration::from_secs(3));
 }
 
+/// Downloads the first two Spotify tracks of `PSST_DIAG_PLAYLIST` into a fresh
+/// cache, then loads and decodes them with a session that can't connect.
+#[test]
+#[ignore]
+fn diagnostics_download_for_offline() {
+    use psst_core::{
+        audio::{normalize::NormalizationLevel, output::DefaultAudioOutput},
+        cache::Cache,
+        cdn::Cdn,
+        player::{item::PlaybackItem, Player, PlayerCommand, PlayerEvent},
+    };
+
+    let mut config = Config::load().expect("Psst config not found, log in first");
+    init(&mut config);
+    let id = std::env::var("PSST_DIAG_PLAYLIST").expect("PSST_DIAG_PLAYLIST");
+    let tracks = WebApi::global().get_playlist_tracks(&id).expect("playlist");
+    let items: Vec<_> = tracks
+        .iter()
+        .filter(|t| !t.is_local)
+        .take(2)
+        .map(|t| PlaybackItem {
+            item_id: t.id.0,
+            norm_level: NormalizationLevel::None,
+        })
+        .collect();
+    let cache_dir = std::env::temp_dir().join("psst-diagnostics-offline");
+    let _ = std::fs::remove_dir_all(&cache_dir);
+    let cache = Cache::new(cache_dir).unwrap();
+
+    let output = DefaultAudioOutput::open().expect("audio output");
+    let session = SessionService::empty();
+    session.update_config(config.session());
+    let mut player = Player::new(
+        session.clone(),
+        Cdn::new(session, None).unwrap(),
+        cache.clone(),
+        config.playback(),
+        &output,
+    );
+    let (sender, receiver) = (player.sender(), player.receiver());
+    let started = Instant::now();
+    sender
+        .send(PlayerEvent::Command(PlayerCommand::Download { items: items.clone() }))
+        .unwrap();
+    let (downloaded, failed) = loop {
+        let event = receiver.recv_timeout(Duration::from_secs(120)).expect("download finished");
+        if let PlayerEvent::Downloaded { downloaded, failed } = event {
+            break (downloaded, failed);
+        }
+        player.handle(event);
+    };
+    println!("downloaded {downloaded}, failed {failed} in {:?}", started.elapsed());
+    assert_eq!((downloaded, failed), (items.len(), 0));
+
+    // No session config: any network access fails, so these must come from the cache.
+    let offline = SessionService::empty();
+    let cdn = Cdn::new(offline.clone(), None).unwrap();
+    for item in &items {
+        let mut loaded = item
+            .load(&offline, cdn.clone(), cache.clone(), &config.playback())
+            .expect("plays offline");
+        let mut buffer = SampleBuffer::<f32>::new(8 * 1024, loaded.source.signal_spec());
+        for _ in 0..50 {
+            loaded.source.read_packet(&mut buffer).expect("decodes");
+        }
+        println!("{:?} plays offline", item.item_id);
+    }
+}
+
 /// Lets the first of two local files (`PSST_DIAG_QUEUE`) end on its own, near
 /// its end, to check that the following one gets preloaded and played.
 #[test]
