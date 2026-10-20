@@ -92,8 +92,8 @@ impl Presence {
     fn activity(&self) -> Activity<'_> {
         let mut activity = Activity::new()
             .activity_type(ActivityType::Listening)
-            // "Listening to <title>" in the member list.
-            .status_display_type(StatusDisplayType::Details)
+            // "Listening to <artist>" in the member list.
+            .status_display_type(StatusDisplayType::State)
             .details(fit(&self.title))
             .state(if self.timestamps.is_some() {
                 fit(&self.artist)
