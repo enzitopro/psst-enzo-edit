@@ -30,12 +30,12 @@ pub struct Presence {
     pub album: Option<String>,
     pub cover_url: Option<String>,
     pub track_url: Option<String>,
-    /// Unix timestamps of the track start and end, `None` while paused.
-    pub timestamps: Option<(i64, i64)>,
+    /// Unix timestamps of the track start and end.
+    pub timestamps: (i64, i64),
 }
 
 impl Presence {
-    /// What to show for the current playback, `None` when nothing plays.
+    /// What to show for the current playback, `None` when nothing plays or it's paused.
     pub fn from_playback(playback: &Playback) -> Option<Self> {
         let now_playing = playback.now_playing.as_ref()?;
         let (title, artist, album, track_url) = match &now_playing.item {
@@ -53,15 +53,14 @@ impl Presence {
             ),
         };
         let timestamps = match playback.state {
-            PlaybackState::Stopped => return None,
-            PlaybackState::Paused => None,
+            PlaybackState::Stopped | PlaybackState::Paused => return None,
             PlaybackState::Playing | PlaybackState::Loading => {
                 let now = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .map_or(0, |d| d.as_secs() as i64);
                 let start = now - now_playing.progress.as_secs() as i64;
                 let end = start + now_playing.item.duration().as_secs() as i64;
-                Some((start, end))
+                (start, end)
             }
         };
         Some(Self {
@@ -76,12 +75,7 @@ impl Presence {
 
     /// Equal apart from progress jitter.
     fn looks_like(&self, other: &Self) -> bool {
-        let timestamps_close = match (self.timestamps, other.timestamps) {
-            (Some((a, _)), Some((b, _))) => (a - b).abs() <= TIMESTAMP_TOLERANCE_SECS,
-            (None, None) => true,
-            _ => false,
-        };
-        timestamps_close
+        (self.timestamps.0 - other.timestamps.0).abs() <= TIMESTAMP_TOLERANCE_SECS
             && self.title == other.title
             && self.artist == other.artist
             && self.album == other.album
@@ -95,15 +89,14 @@ impl Presence {
             // "Listening to <artist>" in the member list.
             .status_display_type(StatusDisplayType::State)
             .details(fit(&self.title))
-            .state(if self.timestamps.is_some() {
-                fit(&self.artist)
-            } else {
-                fit(&format!("{} (paused)", self.artist))
-            });
-        if let Some((start, end)) = self.timestamps {
-            let timestamps = Timestamps::new().start(start);
-            activity = activity.timestamps(if end > start { timestamps.end(end) } else { timestamps });
-        }
+            .state(fit(&self.artist));
+        let (start, end) = self.timestamps;
+        let timestamps = Timestamps::new().start(start);
+        activity = activity.timestamps(if end > start {
+            timestamps.end(end)
+        } else {
+            timestamps
+        });
         if let Some(cover_url) = &self.cover_url {
             let mut assets = Assets::new().large_image(cover_url.as_str());
             if let Some(album) = &self.album {
@@ -181,7 +174,9 @@ struct Worker {
 
 impl Worker {
     fn configure(&mut self, app_id: Option<String>) {
-        let app_id = app_id.map(|id| id.trim().to_string()).filter(|id| !id.is_empty());
+        let app_id = app_id
+            .map(|id| id.trim().to_string())
+            .filter(|id| !id.is_empty());
         if app_id != self.app_id {
             self.disconnect();
             self.app_id = app_id;
@@ -226,7 +221,11 @@ impl Worker {
             (None, None) => true,
             _ => false,
         };
-        if up_to_date || self.last_update.is_some_and(|at| now - at < MIN_UPDATE_INTERVAL) {
+        if up_to_date
+            || self
+                .last_update
+                .is_some_and(|at| now - at < MIN_UPDATE_INTERVAL)
+        {
             return;
         }
         let client = self.client.as_mut().unwrap();
@@ -258,7 +257,7 @@ mod tests {
             album: Some("LYFESTYLE".into()),
             cover_url: Some("https://i.scdn.co/image/x".into()),
             track_url: None,
-            timestamps: Some((start, start + 180)),
+            timestamps: (start, start + 180),
         }
     }
 
@@ -266,11 +265,6 @@ mod tests {
     fn ignores_progress_jitter_but_not_seeks() {
         assert!(presence(1000).looks_like(&presence(1002)));
         assert!(!presence(1000).looks_like(&presence(1030)));
-        let paused = Presence {
-            timestamps: None,
-            ..presence(1000)
-        };
-        assert!(!presence(1000).looks_like(&paused));
     }
 
     #[test]
