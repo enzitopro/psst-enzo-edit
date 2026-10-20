@@ -1,5 +1,5 @@
 use std::{
-    io::Read,
+    io::{self, Read},
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -73,15 +73,16 @@ impl Cdn {
         );
         let access_token = self.login5.get_access_token(&self.session)?;
         let client_token = self.client_token_provider.get()?;
-        let mut response = self
-            .agent
-            .get(&locations_uri)
-            .header(
-                "Authorization",
-                &format!("Bearer {}", access_token.access_token),
-            )
-            .header("client-token", &client_token)
-            .call()?;
+        let mut response = retry_stale_connection(|| {
+            self.agent
+                .get(&locations_uri)
+                .header(
+                    "Authorization",
+                    &format!("Bearer {}", access_token.access_token),
+                )
+                .header("client-token", &client_token)
+                .call()
+        })?;
 
         // Parse the protobuf StorageResolveResponse.
         let bytes = response.body_mut().read_to_vec()?;
@@ -105,11 +106,12 @@ impl Cdn {
         offset: u64,
         length: u64,
     ) -> Result<(u64, impl Read), Error> {
-        let response = self
-            .agent
-            .get(uri)
-            .header("Range", &range_header(offset, length))
-            .call()?;
+        let response = retry_stale_connection(|| {
+            self.agent
+                .get(uri)
+                .header("Range", &range_header(offset, length))
+                .call()
+        })?;
         let total_length = parse_total_content_length(&response);
         let data_reader = response.into_body().into_reader();
         Ok((total_length, data_reader))
@@ -146,6 +148,34 @@ impl CdnUrl {
 impl From<ureq::Error> for Error {
     fn from(err: ureq::Error) -> Self {
         Error::AudioFetchingError(Box::new(err))
+    }
+}
+
+/// After a network blip the pooled keep-alive sockets are dead, and ureq doesn't retry a
+/// request sent on one, so the first requests fail with a connection reset.  Retry them on
+/// fresh sockets (up to the pool size), which is safe for these GETs.
+fn retry_stale_connection<T>(
+    mut request: impl FnMut() -> Result<T, ureq::Error>,
+) -> Result<T, ureq::Error> {
+    const RETRIES: usize = 3; // ureq keeps at most 3 idle connections per host.
+    let mut retries = 0;
+    loop {
+        match request() {
+            Err(ureq::Error::Io(err))
+                if retries < RETRIES
+                    && matches!(
+                        err.kind(),
+                        io::ErrorKind::ConnectionReset
+                            | io::ErrorKind::ConnectionAborted
+                            | io::ErrorKind::BrokenPipe
+                            | io::ErrorKind::UnexpectedEof
+                    ) =>
+            {
+                log::info!("connection dropped ({err}), retrying");
+                retries += 1;
+            }
+            result => break result,
+        }
     }
 }
 
@@ -190,4 +220,46 @@ fn parse_expiration(url: &str) -> Option<Duration> {
     let expires_millis = expires_millis.parse().ok()?;
     let expires = Duration::from_millis(expires_millis);
     Some(expires)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn io_error(kind: io::ErrorKind) -> ureq::Error {
+        ureq::Error::Io(io::Error::from(kind))
+    }
+
+    #[test]
+    fn stale_connections_are_retried_until_a_fresh_one_works() {
+        let mut calls = 0;
+        let result = retry_stale_connection(|| {
+            calls += 1;
+            if calls <= 3 {
+                Err(io_error(io::ErrorKind::ConnectionReset))
+            } else {
+                Ok(calls)
+            }
+        });
+        assert_eq!(result.unwrap(), 4);
+    }
+
+    #[test]
+    fn other_errors_and_endless_resets_give_up() {
+        let mut calls = 0;
+        let refused = retry_stale_connection(|| -> Result<(), _> {
+            calls += 1;
+            Err(io_error(io::ErrorKind::ConnectionRefused))
+        });
+        assert!(refused.is_err());
+        assert_eq!(calls, 1);
+
+        calls = 0;
+        let reset = retry_stale_connection(|| -> Result<(), _> {
+            calls += 1;
+            Err(io_error(io::ErrorKind::ConnectionReset))
+        });
+        assert!(reset.is_err());
+        assert_eq!(calls, 4);
+    }
 }
