@@ -1493,7 +1493,9 @@ impl WebApi {
             Method::Get,
             None,
         )
-        .set_base_uri("spclient.wg.spotify.com");
+        .set_base_uri("spclient.wg.spotify.com")
+        // `spclient` answers 403 to the Web API OAuth token.
+        .partner_auth();
         let result: TrackCredits = self.load(request)?;
         Ok(result)
     }
