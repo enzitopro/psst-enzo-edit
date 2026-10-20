@@ -172,28 +172,36 @@ impl Read for StreamReader {
         }
         let needed_len = remaining_len.min(buf.len() as u64);
 
-        // Make sure that at least `PREFETCH_READ_LENGTH` bytes in front of the reading
-        // head is requested.
-        let prefetch_len = needed_len.max(PREFETCH_READ_LENGTH).min(remaining_len);
-        for (pos, len) in self.data_map.not_yet_requested(position, prefetch_len) {
-            let req_len = len.max(MINIMUM_READ_LENGTH);
-            self.data_map.mark_as_requested(pos, req_len);
-            self.req_sender
-                .send(StreamRequest::Preload {
-                    offset: pos,
-                    length: req_len,
-                })
-                .expect("Data request channel was closed");
-        }
+        let ready_to_read_len = loop {
+            // Make sure that at least `PREFETCH_READ_LENGTH` bytes in front of the reading
+            // head is requested.
+            let prefetch_len = needed_len.max(PREFETCH_READ_LENGTH).min(remaining_len);
+            for (pos, len) in self.data_map.not_yet_requested(position, prefetch_len) {
+                let req_len = len.max(MINIMUM_READ_LENGTH);
+                self.data_map.mark_as_requested(pos, req_len);
+                self.req_sender
+                    .send(StreamRequest::Preload {
+                        offset: pos,
+                        length: req_len,
+                    })
+                    .expect("Data request channel was closed");
+            }
 
-        // Block and wait until at least a part of the range is available, and read it.
-        let ready_to_read_len = self.data_map.wait_for(position, |offset| {
-            // Notify the servicing thread we are blocked, so it can possibly prioritize the
-            // blocked offset.
-            self.req_sender
-                .send(StreamRequest::Blocked { offset })
-                .expect("Data request channel was closed");
-        });
+            // Block and wait until at least a part of the range is available, and read it.
+            let ready = self.data_map.wait_for(position, |offset| {
+                // Notify the servicing thread we are blocked, so it can possibly prioritize
+                // the blocked offset.
+                self.req_sender
+                    .send(StreamRequest::Blocked { offset })
+                    .expect("Data request channel was closed");
+            });
+            match ready {
+                Some(len) => break len,
+                // The download of this range failed, request it again (a moment later, so
+                // a dead connection doesn't turn into a busy loop).
+                None => std::thread::sleep(std::time::Duration::from_secs(1)),
+            }
+        };
         assert!(ready_to_read_len > 0);
         self.reader
             .read(&mut buf[..ready_to_read_len.min(needed_len) as usize])
@@ -240,9 +248,13 @@ impl StreamDataMap {
         self.requested.lock().insert(offset..offset + length);
     }
 
-    /// Remove range previously marked as requested.
+    /// Remove range previously marked as requested, after its download failed, and wake
+    /// up readers waiting for it so they can request it again.
     fn mark_as_not_requested(&self, offset: u64, length: u64) {
+        // Hold `downloaded` like `wait_for` does, so the wake-up can't be missed.
+        let _downloaded = self.downloaded.lock();
         self.requested.lock().remove(offset..offset + length);
+        self.condvar.notify_all();
     }
 
     /// Mark the range as downloaded and notify the `self.condvar`, so tasks
@@ -253,8 +265,9 @@ impl StreamDataMap {
     }
 
     /// Block, waiting until at least some data at given offset is downloaded.
-    /// Returns length that is available.  See `self.mark_as_downloaded`.
-    fn wait_for(&self, offset: u64, blocking_callback: impl Fn(u64)) -> u64 {
+    /// Returns length that is available, or `None` if the offset is no longer
+    /// requested because its download failed.  See `self.mark_as_downloaded`.
+    fn wait_for(&self, offset: u64, blocking_callback: impl Fn(u64)) -> Option<u64> {
         let mut downloaded = self.downloaded.lock();
         let mut called_callback = false;
         loop {
@@ -263,7 +276,10 @@ impl StreamDataMap {
                 let offset_from_overlapping = offset - over_ofs;
                 let available_len = over_len - offset_from_overlapping;
                 // There is `available_len` bytes of data downloaded, stop waiting.
-                break available_len;
+                break Some(available_len);
+            } else if !self.requested.lock().contains(&offset) {
+                // Nothing is going to download it, waiting would block forever.
+                break None;
             } else {
                 // Call the blocking callback, but only the first time we are waiting.
                 if !called_callback {
@@ -288,4 +304,42 @@ impl StreamDataMap {
 
 fn range_to_offset_and_length(range: &Range<u64>) -> (u64, u64) {
     (range.start, range.end - range.start)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{thread, time::Duration};
+
+    use super::*;
+
+    #[test]
+    fn failed_download_is_requested_again_instead_of_blocking_forever() {
+        let storage = StreamStorage::new(1024).unwrap();
+        let mut reader = storage.reader().unwrap();
+        let reading = thread::spawn(move || {
+            let mut buf = [0u8; 16];
+            reader.read(&mut buf).unwrap()
+        });
+
+        // The reader asks for the start of the file, and the download fails.
+        let first = storage.receiver().recv_timeout(Duration::from_secs(2));
+        let Ok(StreamRequest::Preload { offset, length }) = first else {
+            panic!("expected a preload request");
+        };
+        assert_eq!(offset, 0);
+        storage.writer().unwrap().mark_as_not_requested(offset, length);
+
+        // It must ask again, then get the data.
+        let retried = loop {
+            match storage.receiver().recv_timeout(Duration::from_secs(5)) {
+                Ok(StreamRequest::Preload { offset, .. }) => break offset,
+                Ok(StreamRequest::Blocked { .. }) => continue,
+                Err(_) => panic!("the reader never requested the failed range again"),
+            }
+        };
+        assert_eq!(retried, 0);
+        let mut writer = storage.writer().unwrap();
+        writer.write_all(&[7u8; 1024]).unwrap();
+        assert_eq!(reading.join().unwrap(), 16);
+    }
 }
