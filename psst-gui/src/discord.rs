@@ -86,7 +86,9 @@ impl Presence {
     fn activity(&self) -> Activity<'_> {
         let mut activity = Activity::new()
             .activity_type(ActivityType::Listening)
-            // "Listening to <artist>" in the member list.
+            // "Listening to <artist>" in the member list, and on the profile card
+            // instead of the Discord application's name.
+            .name(fit(&self.artist))
             .status_display_type(StatusDisplayType::State)
             .details(fit(&self.title))
             .state(fit(&self.artist));
