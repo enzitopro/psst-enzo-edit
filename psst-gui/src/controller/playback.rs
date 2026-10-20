@@ -172,13 +172,9 @@ impl PlaybackController {
                         .submit_command(cmd::PLAYBACK_STOPPED, (), widget_id)
                         .unwrap();
                 }
-                PlayerEvent::ItemDownloaded { item, ok } => {
+                PlayerEvent::ItemDownloaded { item_id, ok } => {
                     event_sink
-                        .submit_command(
-                            cmd::TRACK_DOWNLOADED,
-                            (TrackId(item.item_id), *ok),
-                            widget_id,
-                        )
+                        .submit_command(cmd::TRACK_DOWNLOADED, (TrackId(*item_id), *ok), widget_id)
                         .unwrap();
                 }
                 PlayerEvent::Downloaded { downloaded, failed } => {
@@ -600,6 +596,10 @@ where
                 data.common_ctx_mut()
                     .downloaded
                     .extend(tracks.iter().copied());
+                ctx.set_handled();
+            }
+            Event::Command(cmd) if cmd.is(cmd::DOWNLOADS_CLEARED) => {
+                data.common_ctx_mut().downloaded.clear();
                 ctx.set_handled();
             }
             Event::Command(cmd) if cmd.is(cmd::DOWNLOADING_TRACKS) => {

@@ -345,7 +345,7 @@ fn diagnostics_library_edits() {
     );
 }
 
-/// Track menu features: similar tracks and credits.
+/// Track menu features: credits.
 #[test]
 #[ignore]
 fn diagnostics_track_menu() {
@@ -355,11 +355,6 @@ fn diagnostics_track_menu() {
     let id = std::env::var("PSST_DIAG_PLAYLIST").expect("PSST_DIAG_PLAYLIST");
     let tracks = api.get_playlist_tracks(&id).unwrap();
     let track = tracks.iter().find(|t| !t.is_local).unwrap();
-    let request = std::sync::Arc::new(crate::data::RecommendationsRequest::for_track(track.id));
-    match api.get_recommendations(request) {
-        Ok(r) => println!("similar tracks: ok, {}", r.tracks.len()),
-        Err(err) => println!("similar tracks: FAILED {err}"),
-    }
     match api.get_track_credits(&track.id.0.to_base62()) {
         Ok(_) => println!("credits: ok"),
         Err(err) => println!("credits: FAILED {err}"),

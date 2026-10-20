@@ -1,9 +1,6 @@
 use std::sync::Arc;
 
-use druid::{
-    im::{vector, Vector},
-    Data, Lens,
-};
+use druid::{im::Vector, Data, Lens};
 use serde::{Deserialize, Serialize};
 
 use super::{ArtistLink, Float64, Promise, Track, TrackId};
@@ -23,13 +20,6 @@ pub struct RecommendationsRequest {
 }
 
 impl RecommendationsRequest {
-    pub fn for_track(id: TrackId) -> Self {
-        Self {
-            seed_tracks: vector![id],
-            ..Self::default()
-        }
-    }
-
     pub fn with_params(mut self, params: RecommendationsParams) -> Self {
         self.params = params;
         self

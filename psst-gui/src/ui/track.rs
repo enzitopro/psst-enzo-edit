@@ -12,7 +12,7 @@ use crate::{
     cmd,
     data::{
         AppState, Library, Nav, Playable, PlaybackOrigin, PlaylistAddTrack, PlaylistRemoveTrack,
-        QueueEntry, RecommendationsRequest, Track,
+        QueueEntry, Track,
     },
     ui::playlist,
     widget::{fill_between::FillBetween, icons, Empty, MyWidgetExt, RemoteImage},
@@ -315,16 +315,6 @@ pub fn track_menu(
             .command(cmd::NAVIGATE.with(Nav::AlbumDetail(album_link.to_owned(), None))),
         );
     }
-
-    menu = menu.entry(
-        MenuItem::new(
-            LocalizedString::new("menu-item-show-recommended")
-                .with_placeholder("Show Similar Tracks"),
-        )
-        .command(cmd::NAVIGATE.with(Nav::Recommendations(Arc::new(
-            RecommendationsRequest::for_track(track.id),
-        )))),
-    );
 
     menu = menu.entry(
         MenuItem::new(

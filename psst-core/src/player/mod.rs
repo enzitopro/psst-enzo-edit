@@ -13,6 +13,7 @@ use crate::{
     cache::CacheHandle,
     cdn::CdnHandle,
     error::Error,
+    item_id::ItemId,
     session::SessionService,
 };
 
@@ -237,6 +238,13 @@ impl Player {
                     path.duration
                 );
             }
+            // Streamed to the end, so it now plays without a connection.
+            if self.cache.audio_file_path(path.file_id).exists() {
+                let _ = self.sender.send(PlayerEvent::ItemDownloaded {
+                    item_id: path.item_id,
+                    ok: true,
+                });
+            }
         }
         self.queue.skip_to_following();
         if let Some(&item) = self.queue.get_current() {
@@ -343,7 +351,10 @@ impl Player {
                         }
                     }
                 };
-                let _ = sender.send(PlayerEvent::ItemDownloaded { item: *item, ok });
+                let _ = sender.send(PlayerEvent::ItemDownloaded {
+                    item_id: item.item_id,
+                    ok,
+                });
             }
             let _ = sender.send(PlayerEvent::Downloaded {
                 downloaded: items.len() - failed,
@@ -545,8 +556,9 @@ pub enum PlayerEvent {
         error: String,
     },
     /// An item of a `Download` command is in the cache, or failed to download.
+    /// Also sent when a streamed track ends and is now in the cache.
     ItemDownloaded {
-        item: PlaybackItem,
+        item_id: ItemId,
         ok: bool,
     },
     /// A `Download` command has finished.

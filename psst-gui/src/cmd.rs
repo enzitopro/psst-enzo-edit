@@ -60,6 +60,8 @@ pub const DOWNLOAD_ALBUM: Selector<AlbumLink> = Selector::new("app.download-albu
 pub const DOWNLOADED_TRACKS: Selector<Vec<TrackId>> = Selector::new("app.downloaded-tracks");
 pub const DOWNLOADING_TRACKS: Selector<Vec<TrackId>> = Selector::new("app.downloading-tracks");
 pub const TRACK_DOWNLOADED: Selector<(TrackId, bool)> = Selector::new("app.track-downloaded");
+/// Clear Cache deleted the downloads too.
+pub const DOWNLOADS_CLEARED: Selector = Selector::new("app.downloads-cleared");
 /// Tracks saved and tracks that failed, or why the download couldn't start.
 pub const DOWNLOAD_FINISHED: Selector<Result<(usize, usize), String>> =
     Selector::new("app.download-finished");

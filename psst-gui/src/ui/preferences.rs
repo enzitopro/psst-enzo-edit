@@ -469,6 +469,7 @@ impl<W: Widget<Preferences>> Controller<Preferences, W> for CacheController {
                     } else {
                         // After clearing, re-measure the cache size.
                         self.start_measuring(ctx.get_external_handle(), ctx.widget_id());
+                        ctx.submit_command(cmd::DOWNLOADS_CLEARED.to(Target::Global));
                     }
                 }
                 ctx.set_handled();

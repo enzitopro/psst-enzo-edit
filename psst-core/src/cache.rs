@@ -12,6 +12,7 @@ use crate::{
 
 use librespot_protocol::metadata::{Episode, Track};
 use protobuf::Message;
+use tempfile::NamedTempFile;
 
 pub type CacheHandle = Arc<Cache>;
 
@@ -141,7 +142,12 @@ impl Cache {
 
     pub fn save_audio_file(&self, file_id: FileId, from_path: PathBuf) -> Result<(), Error> {
         log::debug!("saving audio file to cache: {file_id:?}");
-        fs::copy(from_path, self.audio_file_path(file_id))?;
+        // Copy next to it and rename, so closing Psst mid-copy never leaves a
+        // truncated file that would be played (and counted as downloaded).
+        let mut file = NamedTempFile::new_in(self.base.join("audio"))?;
+        io::copy(&mut fs::File::open(from_path)?, &mut file)?;
+        file.persist(self.audio_file_path(file_id))
+            .map_err(|err| err.error)?;
         Ok(())
     }
 }
