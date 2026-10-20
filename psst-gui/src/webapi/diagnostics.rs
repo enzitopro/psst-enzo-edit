@@ -267,6 +267,84 @@ fn diagnostics_album_detail() {
     }
 }
 
+/// Library and playlist edits, each undone right away: like/unlike a track
+/// not in the saved tracks, add/remove it to `PSST_DIAG_PLAYLIST` (it must
+/// not be in there), and rename that playlist to its own name.
+#[test]
+#[ignore]
+fn diagnostics_library_edits() {
+    let mut config = Config::load().expect("Psst config not found, log in first");
+    init(&mut config);
+    let api = WebApi::global();
+    let id = std::env::var("PSST_DIAG_PLAYLIST").expect("PSST_DIAG_PLAYLIST");
+    let saved: std::collections::HashSet<_> = api
+        .get_saved_tracks()
+        .expect("saved tracks")
+        .iter()
+        .map(|t| t.id)
+        .collect();
+    let in_playlist: std::collections::HashSet<_> = api
+        .get_playlist_tracks(&id)
+        .expect("playlist")
+        .iter()
+        .map(|t| t.id)
+        .collect();
+    let mix = api
+        .get_playlists()
+        .unwrap()
+        .into_iter()
+        .find(|p| p.name.contains("Daily Mix"))
+        .expect("a daily mix");
+    let track = api
+        .get_playlist_tracks(&mix.id)
+        .unwrap()
+        .into_iter()
+        .find(|t| !saved.contains(&t.id) && !in_playlist.contains(&t.id))
+        .expect("a track neither saved nor in the playlist");
+    let base62 = track.id.0.to_base62();
+    let uri = track.id.0.to_uri().unwrap();
+    println!("test track: {} — {} ({uri})", track.artist_names(), track.name);
+
+    match api.get_user_profile() {
+        Ok(profile) => {
+            let playlists = api.get_playlists().unwrap();
+            let own = playlists.iter().filter(|p| p.owner.id == profile.id).count();
+            let editable = playlists.iter().filter(|p| p.collaborative).count();
+            println!(
+                "profile id {:?}: owns {own} of {} playlists, {editable} editable",
+                profile.id,
+                playlists.len()
+            );
+        }
+        Err(err) => println!("profile: FAILED {err}"),
+    }
+    println!("save track:   {:?}", api.save_track(&base62));
+    let saved_now = api.get_saved_tracks().unwrap().iter().any(|t| t.id == track.id);
+    println!("  in saved tracks after saving: {saved_now}");
+    println!("unsave track: {:?}", api.unsave_track(&base62));
+    let saved_now = api.get_saved_tracks().unwrap().iter().any(|t| t.id == track.id);
+    println!("  in saved tracks after unsaving: {saved_now}");
+    if let Some(album) = &track.album {
+        // Only if it wasn't saved before, to leave the library as it was.
+        let had_album = api
+            .get_saved_albums()
+            .unwrap()
+            .iter()
+            .any(|a| a.id == album.id);
+        if !had_album {
+            println!("save album:   {:?}", api.save_album(&album.id));
+            println!("unsave album: {:?}", api.unsave_album(&album.id));
+        }
+    }
+    println!("add to playlist:      {:?}", api.add_track_to_playlist(&id, &uri));
+    println!("remove from playlist: {:?}", api.remove_track_from_playlist(&id, &uri));
+    let playlist = api.get_playlist(&id).expect("playlist detail");
+    println!(
+        "rename to same name:  {:?}",
+        api.change_playlist_details(&id, &playlist.name)
+    );
+}
+
 /// Loads the home page sections.
 #[test]
 #[ignore]

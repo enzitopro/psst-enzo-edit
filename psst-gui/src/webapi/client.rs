@@ -860,6 +860,12 @@ fn is_transport_error(err: &Error) -> bool {
         || message.contains("connection")
 }
 
+/// Saves (`Put`) or removes (`Delete`) any kind of item from the library.  The
+/// endpoint takes the URI as a query parameter, a JSON body is a 400.
+fn library_request(method: Method, uri: &str) -> RequestBuilder {
+    RequestBuilder::new("v1/me/library", method, None).query("uris", urlencoding::encode(uri))
+}
+
 static GLOBAL_WEBAPI: OnceLock<Arc<WebApi>> = OnceLock::new();
 
 /// Global instance.
@@ -1546,15 +1552,13 @@ impl WebApi {
 
     // https://developer.spotify.com/documentation/web-api/reference/save-to-library/
     pub fn save_album(&self, id: &str) -> Result<(), Error> {
-        let request = &RequestBuilder::new("v1/me/library", Method::Put, None)
-            .set_body(Some(json!({"uris": [format!("spotify:album:{id}")]})));
+        let request = &library_request(Method::Put, &format!("spotify:album:{id}"));
         self.send_empty_json(request)
     }
 
     // https://developer.spotify.com/documentation/web-api/reference/remove-from-library/
     pub fn unsave_album(&self, id: &str) -> Result<(), Error> {
-        let request = &RequestBuilder::new("v1/me/library", Method::Delete, None)
-            .set_body(Some(json!({"uris": [format!("spotify:album:{id}")]})));
+        let request = &library_request(Method::Delete, &format!("spotify:album:{id}"));
         self.send_empty_json(request)
     }
 
@@ -1598,29 +1602,26 @@ impl WebApi {
 
     // https://developer.spotify.com/documentation/web-api/reference/save-to-library/
     pub fn save_track(&self, id: &str) -> Result<(), Error> {
-        // Spotify's /v1/me/tracks takes the base62 ids as a query param, not a
-        // uris body.
-        let request = &RequestBuilder::new("v1/me/tracks", Method::Put, None).query("ids", id);
+        // `PUT /v1/me/tracks` answers 403 now.
+        let request = &library_request(Method::Put, &format!("spotify:track:{id}"));
         self.send_empty_json(request)
     }
 
     // https://developer.spotify.com/documentation/web-api/reference/remove-from-library/
     pub fn unsave_track(&self, id: &str) -> Result<(), Error> {
-        let request = &RequestBuilder::new("v1/me/tracks", Method::Delete, None).query("ids", id);
+        let request = &library_request(Method::Delete, &format!("spotify:track:{id}"));
         self.send_empty_json(request)
     }
 
     // https://developer.spotify.com/documentation/web-api/reference/save-to-library/
     pub fn save_show(&self, id: &str) -> Result<(), Error> {
-        let request = &RequestBuilder::new("v1/me/library", Method::Put, None)
-            .set_body(Some(json!({"uris": [format!("spotify:show:{id}")]})));
+        let request = &library_request(Method::Put, &format!("spotify:show:{id}"));
         self.send_empty_json(request)
     }
 
     // https://developer.spotify.com/documentation/web-api/reference/remove-from-library/
     pub fn unsave_show(&self, id: &str) -> Result<(), Error> {
-        let request = &RequestBuilder::new("v1/me/library", Method::Delete, None)
-            .set_body(Some(json!({"uris": [format!("spotify:show:{id}")]})));
+        let request = &library_request(Method::Delete, &format!("spotify:show:{id}"));
         self.send_empty_json(request)
     }
 }
@@ -1843,15 +1844,13 @@ impl WebApi {
     }
 
     pub fn follow_playlist(&self, id: &str) -> Result<(), Error> {
-        let request = &RequestBuilder::new("v1/me/library", Method::Put, None)
-            .set_body(Some(json!({"uris": [format!("spotify:playlist:{id}")]})));
+        let request = &library_request(Method::Put, &format!("spotify:playlist:{id}"));
         self.send_empty_json(request)?;
         Ok(())
     }
 
     pub fn unfollow_playlist(&self, id: &str) -> Result<(), Error> {
-        let request = &RequestBuilder::new("v1/me/library", Method::Delete, None)
-            .set_body(Some(json!({"uris": [format!("spotify:playlist:{id}")]})));
+        let request = &library_request(Method::Delete, &format!("spotify:playlist:{id}"));
         self.send_empty_json(request)?;
         Ok(())
     }
