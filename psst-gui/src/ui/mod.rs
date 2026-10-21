@@ -26,7 +26,7 @@ use druid::{
         CrossAxisAlignment, Either, Flex, Label, LineBreaking, List, Scroll, Slider, Split,
         ViewSwitcher,
     },
-    Color, Env, Insets, Key, LensExt, Menu, MenuItem, Selector, Widget, WidgetExt, WindowDesc,
+    Color, Env, Key, LensExt, Menu, MenuItem, Selector, Widget, WidgetExt, WindowDesc,
 };
 use druid_shell::Cursor;
 use std::sync::Arc;
@@ -40,7 +40,6 @@ pub mod find;
 pub mod home;
 pub mod library;
 pub mod lyrics;
-pub mod menu;
 pub mod playable;
 pub mod playback;
 pub mod playlist;
@@ -55,41 +54,26 @@ pub mod utils;
 pub const DOWNLOAD_ARTWORK: Selector<(String, String)> = Selector::new("app.artwork.download");
 
 pub fn main_window(config: &Config) -> WindowDesc<AppState> {
-    let win = WindowDesc::new(root_widget())
+    WindowDesc::new(root_widget())
         .title(compute_main_window_title)
         .with_min_size((theme::grid(65.0), theme::grid(50.0)))
         .window_size(config.window_size)
         .show_title(false)
-        .transparent_titlebar(true);
-    if cfg!(target_os = "macos") {
-        win.menu(menu::main_menu)
-    } else {
-        win
-    }
+        .transparent_titlebar(true)
 }
 
 pub fn preferences_window() -> WindowDesc<AppState> {
     let win_size = (theme::grid(60.0), theme::grid(55.0));
 
     // On Windows, the window size includes the titlebar.
-    let win_size = if cfg!(target_os = "windows") {
-        const WINDOWS_TITLEBAR_OFFSET: f64 = 56.0;
-        (win_size.0, win_size.1 + WINDOWS_TITLEBAR_OFFSET)
-    } else {
-        win_size
-    };
+    let win_size = (win_size.0, win_size.1 + 56.0);
 
-    let win = WindowDesc::new(preferences_widget())
+    WindowDesc::new(preferences_widget())
         .title("Preferences")
         .window_size(win_size)
         .resizable(false)
         .show_title(false)
-        .transparent_titlebar(true);
-    if cfg!(target_os = "macos") {
-        win.menu(menu::main_menu)
-    } else {
-        win
-    }
+        .transparent_titlebar(true)
 }
 
 pub fn account_setup_window() -> WindowDesc<AppState> {
@@ -97,39 +81,24 @@ pub fn account_setup_window() -> WindowDesc<AppState> {
 
     // On Windows, the window size includes the titlebar, so without this offset
     // the login button gets clipped off the bottom of the window.
-    let win_size = if cfg!(target_os = "windows") {
-        const WINDOWS_TITLEBAR_OFFSET: f64 = 56.0;
-        (win_size.0, win_size.1 + WINDOWS_TITLEBAR_OFFSET)
-    } else {
-        win_size
-    };
+    let win_size = (win_size.0, win_size.1 + 56.0);
 
-    let win = WindowDesc::new(account_setup_widget())
+    WindowDesc::new(account_setup_widget())
         .title("Login")
         .window_size(win_size)
         .with_min_size(win_size)
         .resizable(true)
         .show_title(false)
-        .transparent_titlebar(true);
-    if cfg!(target_os = "macos") {
-        win.menu(menu::main_menu)
-    } else {
-        win
-    }
+        .transparent_titlebar(true)
 }
 
 pub fn artwork_window() -> WindowDesc<AppState> {
     let win_size = (theme::grid(50.0), theme::grid(50.0));
 
     // On Windows, the window size includes the titlebar, so we need to account for it
-    let win_size = if cfg!(target_os = "windows") {
-        const WINDOWS_TITLEBAR_OFFSET: f64 = 24.0; // Standard Windows titlebar height
-        (win_size.0, win_size.1 + WINDOWS_TITLEBAR_OFFSET)
-    } else {
-        win_size
-    };
+    let win_size = (win_size.0, win_size.1 + 24.0);
 
-    let win = WindowDesc::new(artwork_widget())
+    WindowDesc::new(artwork_widget())
         .window_size(win_size)
         .resizable(false)
         .show_title(false)
@@ -145,13 +114,7 @@ pub fn artwork_window() -> WindowDesc<AppState> {
                     Playable::Episode(episode) => episode.name.to_string(),
                 })
                 .unwrap_or_else(|| "Now Playing".to_string())
-        });
-
-    if cfg!(target_os = "macos") {
-        win.menu(menu::main_menu)
-    } else {
-        win
-    }
+        })
 }
 
 fn preferences_widget() -> impl Widget<AppState> {
@@ -233,13 +196,7 @@ fn root_widget() -> impl Widget<AppState> {
         .must_fill_main_axis(true)
         .with_child(sidebar_menu_widget())
         .with_default_spacer()
-        .with_flex_child(playlists, 1.0)
-        .padding(if cfg!(target_os = "macos") {
-            // Accommodate the window controls on Mac.
-            Insets::new(0.0, 24.0, 0.0, 0.0)
-        } else {
-            Insets::ZERO
-        });
+        .with_flex_child(playlists, 1.0);
 
     let controls = Flex::column()
         .with_default_spacer()

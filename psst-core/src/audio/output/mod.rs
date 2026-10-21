@@ -2,11 +2,7 @@ use crate::audio::source::AudioSource;
 
 #[cfg(feature = "cpal")]
 pub mod cpal;
-#[cfg(feature = "cubeb")]
-pub mod cubeb;
 
-#[cfg(feature = "cubeb")]
-pub type DefaultAudioOutput = cubeb::CubebOutput;
 #[cfg(feature = "cpal")]
 pub type DefaultAudioOutput = cpal::CpalOutput;
 

@@ -239,8 +239,11 @@ impl Config {
 
     fn save_to(&self, path: &Path) {
         let json = serde_json::to_vec_pretty(self).expect("Failed to write config");
-        super::utils::write_atomic(path, &json).expect("Failed to write config");
-        log::info!("saved config: {:?}", path);
+        match super::utils::write_atomic(path, &json) {
+            Ok(()) => log::info!("saved config: {:?}", path),
+            // An antivirus or an editor holding the file; the next save tries again.
+            Err(err) => log::error!("couldn't save config {:?}: {err}", path),
+        }
     }
 
     pub fn has_credentials(&self) -> bool {

@@ -712,13 +712,21 @@ impl WebApi {
                     let Some(uri) = &item.content.data.uri else {
                         return;
                     };
+                    // Removed or region-locked items can come without a name.
+                    let name = match item.content.data.typename {
+                        DataTypename::Artist => item.content.data.profile.as_ref().map(|p| &p.name),
+                        _ => item.content.data.name.as_ref(),
+                    };
+                    let Some(name) = name.map(|name| Arc::from(name.as_str())) else {
+                        return;
+                    };
                     let id = uri.split(':').next_back().unwrap_or("").to_string();
 
                     match item.content.data.typename {
                         DataTypename::Playlist => {
                             playlist.push_back(Playlist {
                                 id: id.into(),
-                                name: Arc::from(item.content.data.name.clone().unwrap()),
+                                name,
                                 images: Some(item.content.data.images.as_ref().map_or_else(
                                     Vector::new,
                                     |images| {
@@ -780,9 +788,7 @@ impl WebApi {
                         }
                         DataTypename::Artist => artist.push_back(Artist {
                             id: id.into(),
-                            name: Arc::from(
-                                item.content.data.profile.as_ref().unwrap().name.clone(),
-                            ),
+                            name,
                             images: item.content.data.visuals.as_ref().map_or_else(
                                 Vector::new,
                                 |images| {
@@ -801,7 +807,7 @@ impl WebApi {
                         }),
                         DataTypename::Album => album.push_back(Arc::new(Album {
                             id: id.into(),
-                            name: Arc::from(item.content.data.name.clone().unwrap()),
+                            name,
                             album_type: AlbumType::Album,
                             images: item.content.data.cover_art.as_ref().map_or_else(
                                 Vector::new,
@@ -845,7 +851,7 @@ impl WebApi {
                         })),
                         DataTypename::Podcast => show.push_back(Arc::new(Show {
                             id: id.into(),
-                            name: Arc::from(item.content.data.name.clone().unwrap()),
+                            name,
                             images: item.content.data.cover_art.as_ref().map_or_else(
                                 Vector::new,
                                 |images| {
@@ -889,8 +895,6 @@ impl WebApi {
     }
 }
 
-/// Whether a failed request didn't reach the server or got cut off, as
-/// opposed to a missing token or session, which a retry won't fix.
 /// The pages at `offsets`, in order, fetched by a couple of threads: a page at a
 /// time is slow for thousands of tracks, more threads made Spotify answer "too
 /// many requests".
@@ -912,6 +916,8 @@ fn fetch_pages<P: Send>(
     })
 }
 
+/// Whether a failed request didn't reach the server or got cut off, as
+/// opposed to a missing token or session, which a retry won't fix.
 fn is_transport_error(err: &Error) -> bool {
     let Error::WebApiError(message) = err;
     let message = message.to_lowercase();
@@ -2392,5 +2398,25 @@ mod load_cached_tests {
         assert!(load().is_err());
 
         fs::remove_dir_all(&dir).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod fetch_pages_tests {
+    use super::*;
+
+    #[test]
+    fn keeps_the_page_order_and_fails_with_any_page() {
+        // An odd count, so the threads get uneven shares.
+        let offsets: Vec<usize> = (0..11).map(|i| i * 50).collect();
+        let pages = fetch_pages(&offsets, |offset| Ok(offset / 50)).unwrap();
+        assert_eq!(pages, (0..11).collect::<Vec<_>>());
+
+        let failed = fetch_pages(&offsets, |offset| match offset {
+            300 => Err(Error::WebApiError("io: reset".into())),
+            _ => Ok(offset),
+        });
+        assert!(failed.is_err());
+        assert!(fetch_pages(&[], Ok).unwrap().is_empty());
     }
 }

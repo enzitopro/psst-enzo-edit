@@ -123,12 +123,6 @@ pub fn preferences_widget() -> impl Widget<AppState> {
         .scroll()
         .vertical()
         .content_must_fill(true)
-        .padding(if cfg!(target_os = "macos") {
-            // Accommodate the window controls on Mac.
-            Insets::new(0.0, 24.0, 0.0, 0.0)
-        } else {
-            Insets::ZERO
-        })
 }
 
 fn tabs_widget() -> impl Widget<AppState> {

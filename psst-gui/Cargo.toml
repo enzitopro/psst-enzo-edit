@@ -10,7 +10,6 @@ repository = "https://github.com/jpochyla/psst"
 [features]
 default = ["cpal"]
 cpal = ["psst-core/cpal"]
-cubeb = ["psst-core/cubeb"]
 
 [dependencies]
 psst-core = { path = "../psst-core" }
@@ -54,7 +53,7 @@ druid-shell = { git = "https://github.com/jpochyla/druid", branch = "psst", feat
 ] }
 open = { version = "5.3.2" }
 raw-window-handle = "0.5.2" # Must stay compatible with Druid
-souvlaki = { version = "0.8.2", default-features = false, features = ["use_zbus"] }
+souvlaki = { version = "0.8.2", default-features = false }
 sanitize_html = "0.9.0"
 [dev-dependencies]
 symphonia = { version = "0.5.4", default-features = false }

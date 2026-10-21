@@ -209,20 +209,12 @@ impl PlaybackController {
 
     fn create_media_controls(
         sender: Sender<PlayerEvent>,
-        #[allow(unused_variables)] window: &WindowHandle,
+        window: &WindowHandle,
     ) -> Result<MediaControls, souvlaki::Error> {
-        let hwnd = {
-            #[cfg(target_os = "windows")]
-            {
-                use raw_window_handle::{HasRawWindowHandle, RawWindowHandle};
-                let handle = match window.raw_window_handle() {
-                    RawWindowHandle::Win32(h) => h,
-                    _ => unreachable!(),
-                };
-                Some(handle.hwnd)
-            }
-            #[cfg(not(target_os = "windows"))]
-            None
+        use raw_window_handle::{HasRawWindowHandle, RawWindowHandle};
+        let hwnd = match window.raw_window_handle() {
+            RawWindowHandle::Win32(h) => Some(h.hwnd),
+            _ => unreachable!(),
         };
 
         let mut media_controls = MediaControls::new(PlatformConfig {
