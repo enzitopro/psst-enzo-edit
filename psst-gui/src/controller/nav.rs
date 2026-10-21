@@ -50,6 +50,9 @@ impl NavController {
                 if !data.artist_detail.artist.contains(link) {
                     ctx.submit_command(artist::LOAD_DETAIL.with(link.to_owned()));
                 }
+                ctx.submit_command(
+                    artist::LOAD_DOWNLOADED.with((link.to_owned(), data.to_owned())),
+                );
             }
             Nav::PlaylistDetail(link) => {
                 if !data.playlist_detail.playlist.contains(link) {

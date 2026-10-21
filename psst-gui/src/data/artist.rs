@@ -3,13 +3,15 @@ use std::sync::Arc;
 use druid::{im::Vector, Data, Lens};
 use serde::{Deserialize, Serialize};
 
-use crate::data::{Album, Cached, Image, Promise};
+use crate::data::{Album, Cached, Image, Promise, Track};
 
 #[derive(Clone, Data, Lens)]
 pub struct ArtistDetail {
     pub artist: Promise<Artist, ArtistLink>,
     pub albums: Promise<ArtistAlbums, ArtistLink>,
     pub overview: Promise<Cached<ArtistOverview>, ArtistLink>,
+    /// Tracks of the artist that play without a connection.
+    pub downloaded: Promise<Vector<Arc<Track>>, ArtistLink>,
 }
 
 #[derive(Clone, Data, Lens, Deserialize)]

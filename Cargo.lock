@@ -3985,6 +3985,7 @@ dependencies = [
  "image 0.25.6",
  "infer",
  "itertools 0.14.0",
+ "librespot-protocol",
  "lofty",
  "log",
  "lru",

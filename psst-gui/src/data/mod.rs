@@ -158,6 +158,7 @@ impl AppState {
                 artist: Promise::Empty,
                 albums: Promise::Empty,
                 overview: Promise::Empty,
+                downloaded: Promise::Empty,
             },
             playlist_detail: PlaylistDetail {
                 playlist: Promise::Empty,

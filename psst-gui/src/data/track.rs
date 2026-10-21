@@ -2,12 +2,13 @@ use std::{convert::TryFrom, sync::Arc, time::Duration};
 
 use druid::{im::Vector, lens::Map, Data, Lens};
 use itertools::Itertools;
-use psst_core::item_id::{ItemId, ItemIdType};
+use librespot_protocol::metadata;
+use psst_core::item_id::{FileId, ItemId, ItemIdType};
 use serde::{Deserialize, Serialize};
 
 use crate::data::{
     config::{SortCriteria, SortOrder},
-    AlbumLink, ArtistLink,
+    AlbumLink, ArtistLink, Image,
 };
 
 #[derive(Clone, Debug, Data, Lens, Deserialize)]
@@ -32,6 +33,60 @@ pub struct Track {
     #[serde(skip)]
     pub track_pos: usize,
     pub lyrics: Option<Arc<[TrackLines]>>,
+}
+
+impl Track {
+    /// A Spotify track from the metadata the player caches, so downloaded tracks
+    /// can be listed without a connection.
+    pub fn from_metadata(id: ItemId, track: &metadata::Track) -> Self {
+        let base62 = |gid: &[u8]| -> Arc<str> {
+            ItemId::from_raw(gid, ItemIdType::Unknown)
+                .map(|id| id.to_base62())
+                .unwrap_or_default()
+                .into()
+        };
+        let album = track.album.as_ref().map(|album| AlbumLink {
+            id: base62(album.gid()),
+            name: album.name().into(),
+            images: album
+                .cover
+                .iter()
+                .chain(album.cover_group.image.iter())
+                .filter_map(|image| {
+                    let file_id = FileId::from_raw(image.file_id())?;
+                    let size = |px: i32| (px > 0).then_some(px as usize);
+                    Some(Image {
+                        url: format!("https://i.scdn.co/image/{}", file_id.to_base16()).into(),
+                        width: size(image.width()),
+                        height: size(image.height()),
+                    })
+                })
+                .collect(),
+        });
+        Self {
+            id: TrackId(id),
+            name: track.name().into(),
+            album,
+            artists: track
+                .artist
+                .iter()
+                .map(|artist| ArtistLink {
+                    id: base62(artist.gid()),
+                    name: artist.name().into(),
+                })
+                .collect(),
+            duration: Duration::from_millis(track.duration().max(0) as u64),
+            disc_number: track.disc_number().max(0) as usize,
+            track_number: track.number().max(0) as usize,
+            explicit: track.explicit(),
+            is_local: false,
+            local_path: None,
+            is_playable: Some(true),
+            popularity: None,
+            track_pos: 0,
+            lyrics: None,
+        }
+    }
 }
 
 impl Track {
@@ -250,4 +305,45 @@ pub struct TimeInterval {
     #[serde(deserialize_with = "super::utils::deserialize_secs")]
     pub duration: Duration,
     pub confidence: f64,
+}
+
+#[cfg(test)]
+mod metadata_tests {
+    use super::*;
+
+    #[test]
+    fn track_from_cached_metadata() {
+        let mut artist = metadata::Artist::new();
+        artist.set_gid(1_u128.to_be_bytes().to_vec());
+        artist.set_name("Yeat".into());
+        let mut cover = metadata::Image::new();
+        cover.set_file_id(vec![0xab; 20]);
+        cover.set_width(300);
+        let mut album = metadata::Album::new();
+        album.set_gid(2_u128.to_be_bytes().to_vec());
+        album.set_name("LYFESTYLE".into());
+        album.cover.push(cover);
+        let mut track = metadata::Track::new();
+        track.set_name("Marching".into());
+        track.set_duration(180_500);
+        track.set_number(3);
+        track.artist.push(artist);
+        track.album = Some(album).into();
+
+        let id = ItemId::new(7, ItemIdType::Track);
+        let track = Track::from_metadata(id, &track);
+        assert_eq!(track.id, TrackId(id));
+        assert_eq!(&*track.name, "Marching");
+        assert_eq!(track.duration, Duration::from_millis(180_500));
+        assert_eq!(track.track_number, 3);
+        let artist_id = ItemId::new(1, ItemIdType::Unknown).to_base62();
+        assert_eq!(&*track.artists[0].id, artist_id);
+        let album = track.album.unwrap();
+        assert_eq!(&*album.name, "LYFESTYLE");
+        assert_eq!(
+            album.images[0].url.as_ref(),
+            format!("https://i.scdn.co/image/{}", "ab".repeat(20))
+        );
+        assert_eq!(album.images[0].width, Some(300));
+    }
 }

@@ -230,8 +230,10 @@ impl WebApi {
         loop {
             let response = match f() {
                 Ok(response) => response,
-                // Flaky connections get reset or time out now and then.
-                Err(err) if is_transport_error(&err) && transport_attempts < 2 => {
+                // Flaky connections get reset or time out now and then.  After a
+                // network drop every pooled socket is dead, and ureq keeps up to 3
+                // per host, so retry past them to reach a fresh one.
+                Err(err) if is_transport_error(&err) && transport_attempts < 3 => {
                     transport_attempts += 1;
                     log::info!("request failed ({err}), retrying");
                     thread::sleep(Duration::from_millis(500 * transport_attempts));

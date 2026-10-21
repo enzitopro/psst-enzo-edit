@@ -1,33 +1,96 @@
+use std::sync::Arc;
+
 use druid::{
+    im::Vector,
     kurbo::Circle,
     widget::{CrossAxisAlignment, Either, Flex, Label, LabelText, LineBreaking, List, Scroll},
     Data, Insets, LensExt, LocalizedString, Menu, MenuItem, Selector, Size, UnitPoint, Widget,
     WidgetExt,
 };
 
+use psst_core::player::item::downloaded_tracks;
+
 use crate::{
     cmd,
     data::{
         AppState, Artist, ArtistAlbums, ArtistDetail, ArtistInfo, ArtistLink, ArtistOverview,
-        Cached, Ctx, Nav, WithCtx,
+        Cached, Ctx, Nav, Track, WithCtx,
     },
+    error::Error,
     ui::utils::{stat_row, InfoLayout},
     webapi::WebApi,
     widget::{Async, Empty, MyWidgetExt, RemoteImage},
 };
 
 use super::{
-    album, theme,
+    album, playable, theme, track,
     utils::{self},
 };
 
 pub const LOAD_DETAIL: Selector<ArtistLink> = Selector::new("app.artist.load-detail");
+pub const LOAD_DOWNLOADED: Selector<(ArtistLink, AppState)> =
+    Selector::new("app.artist.load-downloaded");
 
 pub fn detail_widget() -> impl Widget<AppState> {
     Flex::column()
         .with_child(async_artist_info().padding((theme::grid(1.0), 0.0)))
+        .with_child(async_downloaded_widget().padding((theme::grid(1.0), 0.0)))
         .with_child(async_albums_widget().padding((theme::grid(1.0), 0.0)))
         .with_child(async_related_widget().padding((theme::grid(1.0), 0.0)))
+}
+
+/// The artist's tracks that play without a connection, read from the cache, so
+/// they show offline too.  Nothing when there are none.
+fn async_downloaded_widget() -> impl Widget<AppState> {
+    let downloaded = || {
+        Either::new(
+            |tracks: &WithCtx<Vector<Arc<Track>>>, _| tracks.data.is_empty(),
+            Empty,
+            Flex::column()
+                .cross_axis_alignment(CrossAxisAlignment::Start)
+                .with_child(header_widget("Downloaded"))
+                .with_child(playable::list_widget(playable::Display {
+                    track: track::Display {
+                        title: true,
+                        album: true,
+                        cover: true,
+                        ..track::Display::empty()
+                    },
+                })),
+        )
+    };
+    Async::new(|| Empty, downloaded, || Empty)
+        .lens(
+            Ctx::make(
+                AppState::common_ctx,
+                AppState::artist_detail.then(ArtistDetail::downloaded),
+            )
+            .then(Ctx::in_promise()),
+        )
+        .on_command_async(
+            LOAD_DOWNLOADED,
+            |(artist, data)| Ok::<_, Error>(downloaded_tracks_of(&artist, &data)),
+            |_, data, (artist, _)| data.artist_detail.downloaded.defer(artist),
+            |_, data, ((artist, _), tracks)| data.artist_detail.downloaded.update((artist, tracks)),
+        )
+}
+
+fn downloaded_tracks_of(artist: &ArtistLink, data: &AppState) -> Vector<Arc<Track>> {
+    let Some(cache) = &data.preferences.cache else {
+        return Vector::new();
+    };
+    let mut tracks: Vec<_> = downloaded_tracks(cache, &data.config.playback())
+        .iter()
+        .map(|(id, track)| Track::from_metadata(*id, track))
+        .filter(|track| track.artists.iter().any(|a| a.id == artist.id))
+        .map(Arc::new)
+        .collect();
+    let key = |t: &Track| {
+        let album = t.album.as_ref().map(|album| album.name.clone());
+        (album, t.disc_number, t.track_number)
+    };
+    tracks.sort_by_key(|t| key(t));
+    tracks.into()
 }
 
 fn async_albums_widget() -> impl Widget<AppState> {

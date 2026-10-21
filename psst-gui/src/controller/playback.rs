@@ -106,7 +106,7 @@ impl PlaybackController {
             move || {
                 let tracks: Vec<_> = downloaded_tracks(&cache, &config)
                     .into_iter()
-                    .map(TrackId)
+                    .map(|(id, _)| TrackId(id))
                     .collect();
                 let _ = event_sink.submit_command(cmd::DOWNLOADED_TRACKS, tracks, widget_id);
             }
