@@ -267,17 +267,13 @@ fn albums_widget() -> impl Widget<WithCtx<ArtistAlbums>> {
     Flex::column()
         .cross_axis_alignment(CrossAxisAlignment::Start)
         .with_child(header_widget("Albums"))
-        .with_child(List::new(|| album::album_widget(false)).lens(Ctx::map(ArtistAlbums::albums)))
+        .with_child(album::grid_widget().lens(Ctx::map(ArtistAlbums::albums)))
         .with_child(header_widget("Singles"))
-        .with_child(List::new(|| album::album_widget(false)).lens(Ctx::map(ArtistAlbums::singles)))
+        .with_child(album::grid_widget().lens(Ctx::map(ArtistAlbums::singles)))
         .with_child(header_widget("Compilations"))
-        .with_child(
-            List::new(|| album::album_widget(false)).lens(Ctx::map(ArtistAlbums::compilations)),
-        )
+        .with_child(album::grid_widget().lens(Ctx::map(ArtistAlbums::compilations)))
         .with_child(header_widget("Appears On"))
-        .with_child(
-            List::new(|| album::album_widget(false)).lens(Ctx::map(ArtistAlbums::appears_on)),
-        )
+        .with_child(album::grid_widget().lens(Ctx::map(ArtistAlbums::appears_on)))
 }
 
 fn related_widget() -> impl Widget<Cached<ArtistOverview>> {

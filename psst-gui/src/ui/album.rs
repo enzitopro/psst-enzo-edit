@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use druid::{
+    im::Vector,
     widget::{CrossAxisAlignment, Flex, Label, LineBreaking, List, ViewSwitcher},
     LensExt, LocalizedString, Menu, MenuItem, Selector, Size, UnitPoint, Widget, WidgetExt,
 };
@@ -13,7 +14,7 @@ use crate::{
     },
     ui::playable::PlayableIter,
     webapi::WebApi,
-    widget::{icons, Async, MyWidgetExt, RemoteImage},
+    widget::{icons, Async, MyWidgetExt, RemoteImage, Wrap},
 };
 
 use super::{artist, library, playable, theme, track, utils};
@@ -104,6 +105,13 @@ fn cover_widget(size: f64) -> impl Widget<Arc<Album>> {
 
 fn rounded_cover_widget(size: f64) -> impl Widget<Arc<Album>> {
     cover_widget(size).clip(Size::new(size, size).to_rounded_rect(4.0))
+}
+
+/// Album covers in rows that follow the window width.
+pub fn grid_widget() -> impl Widget<WithCtx<Vector<Arc<Album>>>> {
+    // The card aligns itself left, which would stretch it over the whole row:
+    // its width is the cover's and the padding's.
+    Wrap::new(|| album_widget(true).fix_width(theme::grid(18.0))).with_spacing(theme::grid(1.0))
 }
 
 pub fn album_widget(horizontal: bool) -> impl Widget<WithCtx<Arc<Album>>> {

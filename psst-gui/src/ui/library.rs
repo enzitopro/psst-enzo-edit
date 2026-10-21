@@ -231,7 +231,7 @@ pub fn saved_tracks_loader() -> impl Widget<AppState> {
 pub fn saved_albums_widget() -> impl Widget<AppState> {
     Async::new(
         utils::spinner_widget,
-        || List::new(|| album::album_widget(false)).lens(Ctx::map(SavedAlbums::albums)),
+        || album::grid_widget().lens(Ctx::map(SavedAlbums::albums)),
         utils::error_widget,
     )
     .lens(
