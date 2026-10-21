@@ -90,10 +90,15 @@ fn loaded_detail_widget() -> impl Widget<WithCtx<Cached<Arc<Album>>>> {
     Flex::column()
         .cross_axis_alignment(CrossAxisAlignment::Start)
         .with_spacer(theme::grid(1.0))
-        .with_child(album_top)
+        .with_child(album_top.lens(Ctx::map(Cached::data)))
+        .with_child(utils::cached_age_widget().lens(Ctx::data()).padding((
+            theme::grid(4.2),
+            theme::grid(1.0),
+            0.0,
+            0.0,
+        )))
         .with_spacer(theme::grid(1.0))
-        .with_child(album_tracks)
-        .lens(Ctx::map(Cached::data))
+        .with_child(album_tracks.lens(Ctx::map(Cached::data)))
 }
 
 fn cover_widget(size: f64) -> impl Widget<Arc<Album>> {

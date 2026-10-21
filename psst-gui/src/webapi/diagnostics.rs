@@ -1106,3 +1106,41 @@ fn diagnostics_player_restore_paused() {
     assert!(while_paused >= progress && while_paused < progress + Duration::from_secs(1));
     assert!(after_resume > progress + Duration::from_secs(1));
 }
+
+/// The library and a playlist keep copies that read back whole, for offline.
+#[test]
+#[ignore]
+fn diagnostics_offline_copies() {
+    use std::sync::Arc;
+    let mut config = Config::load().expect("Psst config not found, log in first");
+    init(&mut config);
+    let dir = std::env::temp_dir().join("psst-offline-diagnostics");
+    std::fs::create_dir_all(&dir).unwrap();
+    let api = WebApi::new(None, Some(dir), config.paginated_limit);
+    let session = SessionService::empty();
+    session.update_config(config.session());
+    api.set_session(session);
+    let token = config.get_or_refresh_webapi_token().ok();
+    api.set_webapi_credentials(config.webapi_client_id_value().map(String::from), token);
+
+    let playlists = api.get_playlists().expect("playlists");
+    let copy: druid::im::Vector<crate::data::Playlist> =
+        api.cache_get_json("offline", "playlists").expect("playlists copy");
+    assert_eq!(copy.len(), playlists.len());
+    let ids = |tracks: &druid::im::Vector<Arc<Track>>| tracks.iter().map(|t| t.id).collect::<Vec<_>>();
+    let saved = api.get_saved_tracks().expect("saved tracks");
+    let copy: druid::im::Vector<Arc<Track>> =
+        api.cache_get_json("offline", "saved-tracks").expect("saved copy");
+    assert_eq!(ids(&copy), ids(&saved));
+    let id = std::env::var("PSST_DIAG_PLAYLIST").expect("PSST_DIAG_PLAYLIST");
+    let tracks = api.get_playlist_tracks(&id).expect("playlist");
+    let copy: druid::im::Vector<Arc<Track>> =
+        api.cache_get_json("offline-playlist", &id).expect("playlist copy");
+    assert_eq!(ids(&copy), ids(&tracks));
+    println!(
+        "copies: {} playlists, {} saved tracks, {} tracks of {id}",
+        playlists.len(),
+        saved.len(),
+        tracks.len()
+    );
+}

@@ -120,7 +120,14 @@ fn async_albums_widget() -> impl Widget<AppState> {
 fn async_artist_info() -> impl Widget<AppState> {
     Async::new(
         utils::spinner_widget,
-        || artist_info_widget().lens(Ctx::map(Cached::data.then(ArtistOverview::info))),
+        || {
+            Flex::column()
+                .cross_axis_alignment(CrossAxisAlignment::Start)
+                .with_child(
+                    artist_info_widget().lens(Ctx::map(Cached::data.then(ArtistOverview::info))),
+                )
+                .with_child(utils::cached_age_widget().lens(Ctx::data()))
+        },
         || Empty,
     )
     .lens(

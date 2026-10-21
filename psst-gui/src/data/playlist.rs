@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use druid::{im::Vector, Data, Lens};
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::data::utils::sanitize_html_string;
 use crate::data::{user::PublicUser, Image, Promise, Track, TrackId};
@@ -24,7 +24,9 @@ pub struct PlaylistRemoveTrack {
     pub track_uri: Arc<str>,
 }
 
-#[derive(Clone, Debug, Data, Lens, Deserialize)]
+/// Deserializes the Web API's playlists, and what it serializes too, for the
+/// offline copy of the library.
+#[derive(Clone, Debug, Data, Lens, Deserialize, Serialize)]
 pub struct Playlist {
     pub id: Arc<str>,
     pub name: Arc<str>,
@@ -37,6 +39,7 @@ pub struct Playlist {
     // makes serde error with "duplicate field `items`", so read only `tracks`.
     #[serde(rename = "tracks")]
     #[serde(deserialize_with = "deserialize_track_count")]
+    #[serde(serialize_with = "serialize_track_count")]
     #[serde(default)]
     pub track_count: Option<usize>,
     pub owner: PublicUser,
@@ -89,6 +92,18 @@ pub struct PlaylistLink {
     pub name: Arc<str>,
 }
 
+/// As the Web API sends it, `{"total": 12}`.
+fn serialize_track_count<S: Serializer>(
+    count: &Option<usize>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    #[derive(Serialize)]
+    struct PlaylistTracksRef {
+        total: Option<usize>,
+    }
+    PlaylistTracksRef { total: *count }.serialize(serializer)
+}
+
 fn deserialize_track_count<'de, D>(deserializer: D) -> Result<Option<usize>, D::Error>
 where
     D: Deserializer<'de>,
@@ -108,4 +123,30 @@ where
 {
     let description: String = String::deserialize(deserializer)?;
     Ok(sanitize_html_string(&description))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn offline_copy_round_trips() {
+        let playlist: Playlist = serde_json::from_value(serde_json::json!({
+            "id": "p",
+            "name": "Rock & Roll",
+            "images": [{ "url": "https://i.scdn.co/x", "width": 300, "height": 300 }],
+            "description": "Songs <b>&amp;</b> more",
+            "tracks": { "total": 12 },
+            "owner": { "display_name": "Me", "id": "me" },
+            "collaborative": false,
+            "public": true
+        }))
+        .unwrap();
+        let json = serde_json::to_string(&playlist).unwrap();
+        let copy: Playlist = serde_json::from_str(&json).unwrap();
+        assert_eq!(serde_json::to_string(&copy).unwrap(), json);
+        assert_eq!(copy.track_count, Some(12));
+        assert_eq!(copy.description, playlist.description);
+        assert_eq!(&*copy.owner.display_name, "Me");
+    }
 }

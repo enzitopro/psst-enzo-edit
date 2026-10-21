@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use druid::{Data, Lens};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Data, Lens, Deserialize)]
 pub struct UserProfile {
@@ -11,7 +11,7 @@ pub struct UserProfile {
     pub id: Arc<str>,
 }
 
-#[derive(Clone, Data, Lens, Deserialize, Debug)]
+#[derive(Clone, Data, Lens, Deserialize, Serialize, Debug)]
 pub struct PublicUser {
     pub display_name: Arc<str>,
     pub id: Arc<str>,

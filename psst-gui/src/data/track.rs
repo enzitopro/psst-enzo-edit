@@ -2,7 +2,7 @@ use std::{convert::TryFrom, sync::Arc, time::Duration};
 
 use druid::{im::Vector, lens::Map, Data, Lens};
 use itertools::Itertools;
-use psst_core::item_id::{ItemId, ItemIdType};
+use psst_core::item_id::{ItemId, ItemIdType, LocalItemRegistry};
 use serde::{Deserialize, Serialize};
 
 use crate::data::{
@@ -213,10 +213,20 @@ impl Data for TrackId {
     }
 }
 
+/// Local files are kept by path, their IDs are only good for this run.
+const LOCAL_ID_PREFIX: &str = "local:";
+
 impl TryFrom<String> for TrackId {
     type Error = &'static str;
 
     fn try_from(value: String) -> Result<Self, Self::Error> {
+        if let Some(path) = value.strip_prefix(LOCAL_ID_PREFIX) {
+            return Ok(Self(match path {
+                // Not found among the local files.
+                "" => ItemId::new(0, ItemIdType::LocalFile),
+                path => ItemId::from_local(path.into()),
+            }));
+        }
         ItemId::from_base62(&value, ItemIdType::Track)
             .ok_or("Invalid ID")
             .map(Self)
@@ -225,6 +235,10 @@ impl TryFrom<String> for TrackId {
 
 impl From<TrackId> for String {
     fn from(id: TrackId) -> Self {
+        if id.0.is_local() {
+            let path = LocalItemRegistry::get(id.0.id).unwrap_or_default();
+            return format!("{LOCAL_ID_PREFIX}{}", path.display());
+        }
         id.0.to_base62()
     }
 }

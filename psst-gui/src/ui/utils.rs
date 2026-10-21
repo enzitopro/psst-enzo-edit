@@ -2,12 +2,17 @@ use std::{f64::consts::PI, time::Duration};
 
 use druid::{
     kurbo::Circle,
-    widget::{prelude::*, Button, CrossAxisAlignment, Flex, Label, SizedBox},
+    widget::{prelude::*, Button, CrossAxisAlignment, Either, Flex, Label, SizedBox},
     Data, Point, Vec2, Widget, WidgetExt, WidgetPod,
 };
 use time_humanize::HumanTime;
 
-use crate::{cmd, data::WithCtx, error::Error, widget::icons};
+use crate::{
+    cmd,
+    data::{Cached, WithCtx},
+    error::Error,
+    widget::{icons, Empty, MyWidgetExt},
+};
 
 use super::theme;
 
@@ -121,6 +126,29 @@ pub fn error_widget() -> impl Widget<Error> {
         .with_child(error)
         .padding((0.0, theme::grid(6.0)))
         .center()
+}
+
+/// "Saved 3 days ago · Refresh" under a page shown from the cache, nothing when
+/// it was just fetched.
+pub fn cached_age_widget<T: Data>() -> impl Widget<Cached<T>> {
+    let age = Label::dynamic(|cached: &Cached<T>, _| {
+        let age = cached.cached_at.and_then(|at| at.elapsed().ok());
+        format!("Saved {} ago", as_human(age.unwrap_or_default()))
+    })
+    .with_text_size(theme::TEXT_SIZE_SMALL)
+    .with_text_color(theme::PLACEHOLDER_COLOR);
+    let refresh = Label::new("Refresh")
+        .with_text_size(theme::TEXT_SIZE_SMALL)
+        .link()
+        .on_left_click(|ctx, _, _, _| ctx.submit_command(cmd::RELOAD));
+    Either::new(
+        |cached: &Cached<T>, _| cached.cached_at.is_none(),
+        Empty,
+        Flex::row()
+            .with_child(age)
+            .with_spacer(theme::grid(1.0))
+            .with_child(refresh),
+    )
 }
 
 pub fn as_minutes_and_seconds(dur: Duration) -> String {

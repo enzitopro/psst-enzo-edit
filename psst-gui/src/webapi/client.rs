@@ -905,6 +905,16 @@ impl WebApi {
     }
 }
 
+/// Positions `tracks` in their order, which a copy from the cache doesn't keep.
+fn numbered(mut tracks: Vector<Arc<Track>>) -> Vector<Arc<Track>> {
+    for (position, track) in tracks.iter_mut().enumerate() {
+        if track.track_pos != position {
+            Arc::make_mut(track).track_pos = position;
+        }
+    }
+    tracks
+}
+
 /// The pages at `offsets`, in order, fetched by a couple of threads: a page at a
 /// time is slow for thousands of tracks, more threads made Spotify answer "too
 /// many requests".
@@ -1645,6 +1655,11 @@ impl WebApi {
     /// Every liked song, newest first, whatever the paginated limit: a liked track
     /// missing here shows as not liked (one account has 4000 of them).
     pub fn get_saved_tracks(&self) -> Result<Vector<Arc<Track>>, Error> {
+        self.with_offline_copy("offline", "saved-tracks", || self.fetch_saved_tracks())
+            .map(numbered)
+    }
+
+    fn fetch_saved_tracks(&self) -> Result<Vector<Arc<Track>>, Error> {
         // The web player reads them as this playlist, through pathfinder.  The Web
         // API needs 81 requests for 4000 of them, and after a day of that Spotify
         // blocked the library endpoints of the user's API app for 18 hours.
@@ -1839,11 +1854,36 @@ impl WebApi {
     /// (Daily Mixes and other mixes) and knows nothing about pins, so this asks
     /// pathfinder first and only falls back to the Web API.
     pub fn get_playlists(&self) -> Result<Vector<Playlist>, Error> {
-        match self.get_library_playlists() {
-            Ok(playlists) => Ok(playlists),
+        self.with_offline_copy("offline", "playlists", || {
+            match self.get_library_playlists() {
+                Ok(playlists) => Ok(playlists),
+                Err(err) => {
+                    log::warn!("failed to load library from pathfinder, using Web API: {err}");
+                    self.get_web_api_playlists()
+                }
+            }
+        })
+    }
+
+    /// `fetch`, keeping a copy to show when it fails, e.g. offline: the playlists
+    /// downloaded for offline listening need their pages too.
+    fn with_offline_copy<T: Serialize + DeserializeOwned>(
+        &self,
+        bucket: &str,
+        key: &str,
+        fetch: impl FnOnce() -> Result<T, Error>,
+    ) -> Result<T, Error> {
+        match fetch() {
+            Ok(value) => {
+                self.cache_set_json(bucket, key, &value);
+                Ok(value)
+            }
             Err(err) => {
-                log::warn!("failed to load library from pathfinder, using Web API: {err}");
-                self.get_web_api_playlists()
+                let copy = self.cache_get_json(bucket, key);
+                if copy.is_some() {
+                    log::warn!("showing the saved copy of {bucket}/{key}: {err}");
+                }
+                copy.ok_or(err)
             }
         }
     }
@@ -2003,7 +2043,9 @@ impl WebApi {
 
     /// The playlist's tracks, up to the paginated limit, for showing it.
     pub fn get_playlist_tracks(&self, id: &str) -> Result<Vector<Arc<Track>>, Error> {
-        self.playlist_tracks(id, false)
+        let tracks =
+            self.with_offline_copy("offline-playlist", id, || self.playlist_tracks(id, false));
+        tracks.map(numbered)
     }
 
     /// Every track of the playlist, for downloading or liking all of it.
@@ -2453,6 +2495,22 @@ mod load_cached_tests {
         fs::write(&path, br#""rec"#).unwrap();
         assert!(load().is_err());
 
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn offline_copies_stand_in_for_failed_loads() {
+        let dir = std::env::temp_dir().join(format!("psst-offline-test-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let api = WebApi::new(None, Some(dir.clone()), 50);
+        let failed = || Err(Error::WebApiError("io: offline".into()));
+        assert!(api.with_offline_copy::<Vec<u32>>("o", "k", failed).is_err());
+        let fetched = api.with_offline_copy("o", "k", || Ok(vec![1, 2]));
+        assert_eq!(fetched.unwrap(), [1, 2]);
+        assert_eq!(
+            api.with_offline_copy::<Vec<u32>>("o", "k", failed).unwrap(),
+            [1, 2]
+        );
         fs::remove_dir_all(&dir).unwrap();
     }
 }

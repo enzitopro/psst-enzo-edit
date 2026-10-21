@@ -828,8 +828,11 @@ mod tests {
         let origin = PlaybackOrigin::Library;
         let mut local = (*track(2)).clone();
         local.local_path = Some(r"C:\Music\b.mp3".into());
+        local.id = TrackId(ItemId::from_local(r"C:\Music\b.mp3".into()));
         local.duration = Duration::from_millis(123_456);
-        let tracks = [track(1), Arc::new(local), track(3)];
+        let mut missing = (*track(3)).clone();
+        missing.id = TrackId(ItemId::new(0, ItemIdType::LocalFile));
+        let tracks = [track(1), Arc::new(local), Arc::new(missing)];
         state.playback.queue = tracks
             .iter()
             .map(|track| QueueEntry {
@@ -850,6 +853,9 @@ mod tests {
         assert_eq!(track.id, tracks[1].id);
         assert_eq!(track.duration, Duration::from_millis(123_456));
         assert_eq!(track.local_path.as_deref(), Some(r"C:\Music\b.mp3"));
+        // Local IDs only hold for one run, so they go by path.
+        assert!(json.contains(r#""id":"local:C:\\Music\\b.mp3""#));
+        assert_eq!(loaded.tracks[2].id, tracks[2].id);
 
         // Nothing playing, nothing to keep.
         state.playback.now_playing = None;
