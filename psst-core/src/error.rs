@@ -20,7 +20,7 @@ pub enum Error {
     AudioDecodingError(Box<dyn error::Error + Send>),
     AudioOutputError(Box<dyn error::Error + Send>),
     AudioProbeError(Box<dyn error::Error + Send>),
-    ScrobblerError(Box<dyn error::Error + Send>),
+    ScrobblerError(String),
     ResamplingError(i32),
     ConfigError(String),
     IoError(io::Error),
@@ -59,11 +59,11 @@ impl fmt::Display for Error {
                 write!(f, "Resampling failed with error code {code}")
             }
             Self::ConfigError(msg) => write!(f, "Configuration error: {msg}"),
+            Self::ScrobblerError(msg) => write!(f, "Last.fm: {msg}"),
             Self::JsonError(err)
             | Self::AudioFetchingError(err)
             | Self::AudioDecodingError(err)
             | Self::AudioOutputError(err)
-            | Self::ScrobblerError(err)
             | Self::AudioProbeError(err) => err.fmt(f),
             Self::InvalidStateError(err) | Self::UnimplementedError(err) => err.fmt(f),
             Self::IoError(err) => err.fmt(f),

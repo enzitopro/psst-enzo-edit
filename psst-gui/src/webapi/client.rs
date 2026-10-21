@@ -1631,22 +1631,23 @@ impl WebApi {
 /// View endpoints.
 impl WebApi {
     pub fn get_user_info(&self) -> Result<(String, String), Error> {
-        #[derive(Deserialize, Clone, Data)]
+        #[derive(Deserialize, Serialize)]
         struct User {
             region: String,
             timezone: String,
         }
-        let token = self.access_token()?;
-
-        let request = &RequestBuilder::new("json".to_string(), Method::Get, None)
-            .set_protocol("http")
-            .set_base_uri("ip-api.com")
-            .query("fields", "260")
-            .header("Authorization", format!("Bearer {token}"));
-
-        let result: Cached<User> = self.load_cached(request, "user-info", "usrinfo")?;
-
-        Ok((result.data.region, result.data.timezone))
+        // A third party over plain HTTP: never send it the Spotify token.
+        let user = match self.cache_get_json::<User>("user-info", "usrinfo") {
+            Some(user) => user,
+            None => {
+                let user: User = self
+                    .get_public_json("http://ip-api.com/json?fields=260")?
+                    .ok_or_else(|| Error::WebApiError("ip-api.com: not found".to_string()))?;
+                self.cache_set_json("user-info", "usrinfo", &user);
+                user
+            }
+        };
+        Ok((user.region, user.timezone))
     }
 
     pub fn get_section(&self, section_uri: &str) -> Result<MixedView, Error> {

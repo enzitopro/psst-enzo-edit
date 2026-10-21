@@ -1,7 +1,7 @@
 use std::{
     env::{self, VarError},
     fs::{self, File, OpenOptions},
-    io::{BufReader, BufWriter},
+    io::{BufReader, BufWriter, Write},
     path::{Path, PathBuf},
 };
 
@@ -213,30 +213,46 @@ impl Config {
     }
 
     pub fn load() -> Option<Config> {
-        let path = Self::config_path().expect("Failed to get config path");
-        if let Ok(file) = File::open(&path) {
-            log::info!("loading config: {:?}", path);
-            let reader = BufReader::new(file);
-            Some(serde_json::from_reader(reader).expect("Failed to read config"))
-        } else {
-            None
+        Self::load_from(&Self::config_path().expect("Failed to get config path"))
+    }
+
+    fn load_from(path: &Path) -> Option<Config> {
+        let file = File::open(path).ok()?;
+        log::info!("loading config: {:?}", path);
+        match serde_json::from_reader(BufReader::new(file)) {
+            Ok(config) => Some(config),
+            Err(err) => {
+                // Start with defaults rather than crash on every launch, and keep
+                // the broken file, it may still hold the login.
+                log::error!("config is unreadable ({err}), starting with defaults");
+                let _ = fs::copy(path, path.with_extension("json.bad"));
+                None
+            }
         }
     }
 
     pub fn save(&self) {
         let dir = Self::config_dir().expect("Failed to get config dir");
-        let path = Self::config_path().expect("Failed to get config path");
         mkdir_if_not_exists(&dir).expect("Failed to create config dir");
+        self.save_to(&Self::config_path().expect("Failed to get config path"));
+    }
 
+    fn save_to(&self, path: &Path) {
         let mut options = OpenOptions::new();
         options.write(true).create(true).truncate(true);
         #[cfg(target_family = "unix")]
         options.mode(0o600);
 
-        let file = options.open(&path).expect("Failed to create config");
-        let writer = BufWriter::new(file);
-
-        serde_json::to_writer_pretty(writer, self).expect("Failed to write config");
+        // Write a temporary file and swap it in, so a crash or power cut while
+        // saving never leaves a half-written config.json behind.
+        let tmp_path = path.with_extension("json.tmp");
+        let file = options.open(&tmp_path).expect("Failed to create config");
+        let mut writer = BufWriter::new(file);
+        serde_json::to_writer_pretty(&mut writer, self).expect("Failed to write config");
+        writer.flush().expect("Failed to write config");
+        writer.get_ref().sync_all().expect("Failed to write config");
+        drop(writer);
+        fs::rename(&tmp_path, path).expect("Failed to replace config");
         log::info!("saved config: {:?}", path);
     }
 
@@ -398,4 +414,32 @@ fn get_dir_size(path: &Path) -> Option<u64> {
         };
         Some(acc + size)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn broken_config_starts_with_defaults() {
+        let dir = env::temp_dir().join(format!("psst-config-test-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.json");
+
+        let config = Config {
+            discord_app_id: Some("123".into()),
+            ..Config::default()
+        };
+        config.save_to(&path);
+        let loaded = Config::load_from(&path).unwrap();
+        assert_eq!(loaded.discord_app_id.as_deref(), Some("123"));
+
+        // A save cut short in an older version.
+        let json = fs::read(&path).unwrap();
+        fs::write(&path, &json[..json.len() / 2]).unwrap();
+        assert!(Config::load_from(&path).is_none());
+        assert!(path.with_extension("json.bad").exists());
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
 }

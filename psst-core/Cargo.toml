@@ -16,6 +16,7 @@ byteorder = { version = "1.5.0" }
 crossbeam-channel = { version = "0.5.13" }
 git-version = { version = "0.3.9" }
 log = { version = "0.4.22" }
+md5 = { version = "0.7.0" }
 num-bigint = { version = "0.4.6", features = ["rand"] }
 num-traits = { version = "0.2.19" }
 oauth2 = { version = "4.4.2" }
@@ -30,7 +31,6 @@ serde = { version = "1.0.210", features = ["derive"] }
 serde_json = { version = "1.0.132" }
 socks = { version = "0.3.4" }
 tempfile = { version = "3.13.0" }
-rustfm-scrobble = "1.1.1"
 ureq = { version = "3.0.11", features = ["json"] }
 url = { version = "2.5.2" }
 

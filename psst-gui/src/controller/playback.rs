@@ -14,14 +14,13 @@ use psst_core::{
     audio::{normalize::NormalizationLevel, output::DefaultAudioOutput},
     cache::Cache,
     cdn::Cdn,
-    lastfm::LastFmClient,
+    lastfm::{LastFmClient, Scrobbler},
     player::{
         item::{downloaded_tracks, PlaybackItem},
         PlaybackConfig, Player, PlayerCommand, PlayerEvent,
     },
     session::SessionService,
 };
-use rustfm_scrobble::Scrobbler;
 use souvlaki::{
     MediaControlEvent, MediaControls, MediaMetadata, MediaPlayback, MediaPosition, PlatformConfig,
 };
@@ -310,24 +309,29 @@ impl PlaybackController {
         }
     }
 
+    // Last.fm calls run in their own thread: on the UI thread a slow or dead
+    // connection froze the window while the music kept playing.
+
     fn report_now_playing(&mut self, playback: &Playback) {
         if let Some(now_playing) = playback.now_playing.as_ref() {
             if let Playable::Track(track) = &now_playing.item {
-                if let Some(scrobbler) = &self.scrobbler {
-                    let artist = track.artist_name();
-                    let title = track.name.clone();
-                    let album = track.album.clone();
-
-                    if let Err(e) = LastFmClient::now_playing_song(
-                        scrobbler,
-                        artist.as_ref(),
-                        title.as_ref(),
-                        album.as_ref().map(|a| a.name.as_ref()),
-                    ) {
-                        log::warn!("failed to report 'Now Playing' to Last.fm: {e}");
-                    } else {
-                        log::info!("reported 'Now Playing' to Last.fm: {artist} - {title}");
-                    }
+                if let Some(scrobbler) = self.scrobbler.clone() {
+                    let artist = track.artist_name().to_string();
+                    let title = track.name.to_string();
+                    let album = track.album.as_ref().map(|a| a.name.to_string());
+                    thread::spawn(move || {
+                        match LastFmClient::now_playing_song(
+                            &scrobbler,
+                            &artist,
+                            &title,
+                            album.as_deref(),
+                        ) {
+                            Ok(()) => {
+                                log::info!("reported 'Now Playing' to Last.fm: {artist} - {title}")
+                            }
+                            Err(e) => log::warn!("failed to report 'Now Playing' to Last.fm: {e}"),
+                        }
+                    });
                 } else {
                     log::debug!("Last.fm not configured, skipping now_playing report.");
                 }
@@ -336,25 +340,41 @@ impl PlaybackController {
     }
 
     fn report_scrobble(&mut self, playback: &Playback) {
+        const ATTEMPTS: u32 = 3;
+        const RETRY_AFTER: Duration = Duration::from_secs(10);
+
         if let Some(now_playing) = playback.now_playing.as_ref() {
             if let Playable::Track(track) = &now_playing.item {
                 if now_playing.progress >= track.duration / 2 && !self.has_scrobbled {
-                    if let Some(scrobbler) = &self.scrobbler {
-                        let artist = track.artist_name();
-                        let title = track.name.clone();
-                        let album = track.album.clone();
-
-                        if let Err(e) = LastFmClient::scrobble_song(
-                            scrobbler,
-                            artist.as_ref(),
-                            title.as_ref(),
-                            album.as_ref().map(|a| a.name.as_ref()),
-                        ) {
-                            log::warn!("failed to scrobble track to Last.fm: {e}");
-                        } else {
-                            log::info!("scrobbled track to Last.fm: {artist} - {title}");
-                            self.has_scrobbled = true;
-                        }
+                    // Once per play: retries happen in the thread, not on every tick.
+                    self.has_scrobbled = true;
+                    if let Some(scrobbler) = self.scrobbler.clone() {
+                        let artist = track.artist_name().to_string();
+                        let title = track.name.to_string();
+                        let album = track.album.as_ref().map(|a| a.name.to_string());
+                        thread::spawn(move || {
+                            for attempt in 1..=ATTEMPTS {
+                                match LastFmClient::scrobble_song(
+                                    &scrobbler,
+                                    &artist,
+                                    &title,
+                                    album.as_deref(),
+                                ) {
+                                    Ok(()) => {
+                                        log::info!(
+                                            "scrobbled track to Last.fm: {artist} - {title}"
+                                        );
+                                        return;
+                                    }
+                                    Err(e) => {
+                                        log::warn!("failed to scrobble track to Last.fm: {e}");
+                                        if attempt < ATTEMPTS {
+                                            thread::sleep(RETRY_AFTER);
+                                        }
+                                    }
+                                }
+                            }
+                        });
                     } else {
                         log::debug!("Last.fm not configured, skipping scrobble.");
                     }

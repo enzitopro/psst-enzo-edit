@@ -907,3 +907,18 @@ fn diagnostics_decode_each_format() {
         }
     }
 }
+
+/// Signs a Last.fm call with the saved API key and secret.  A bad token must be
+/// refused as a bad token (error 4), not for a bad signature (error 13).
+#[test]
+#[ignore]
+fn diagnostics_lastfm_signature() {
+    let config = Config::load().expect("Psst config not found, log in first");
+    let (Some(key), Some(secret)) = (config.lastfm_api_key, config.lastfm_api_secret) else {
+        panic!("Last.fm is not set up");
+    };
+    let result = psst_core::lastfm::exchange_token_for_session(&key, &secret, "invalid-token");
+    println!("auth.getSession with a bad token: {result:?}");
+    let err = result.unwrap_err().to_string();
+    assert!(!err.contains("signature"), "{err}");
+}
