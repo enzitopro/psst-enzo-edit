@@ -418,16 +418,33 @@ pub struct Library {
 }
 
 impl Library {
-    pub fn add_track(&mut self, mut track: Arc<Track>) {
-        if let Some(saved) = self.saved_tracks.resolved_mut() {
-            // The newest saved track comes first in "date added" order.
-            for saved_track in saved.tracks.iter_mut() {
-                Arc::make_mut(saved_track).track_pos += 1;
-            }
-            Arc::make_mut(&mut track).track_pos = 0;
+    pub fn add_track(&mut self, track: Arc<Track>) {
+        self.add_tracks([track]);
+    }
+
+    /// Puts `tracks` at the top of the saved tracks, in their order, skipping the
+    /// ones already saved.  Returns how many were added.
+    pub fn add_tracks(&mut self, tracks: impl IntoIterator<Item = Arc<Track>>) -> usize {
+        let Some(saved) = self.saved_tracks.resolved_mut() else {
+            return 0;
+        };
+        // Also skips repeats, a playlist can have the same track twice.
+        let mut seen = saved.set.clone();
+        let new: Vec<_> = tracks
+            .into_iter()
+            .filter(|track| seen.insert(track.id).is_none())
+            .collect();
+        // The newest saved tracks come first in "date added" order.
+        for saved_track in saved.tracks.iter_mut() {
+            Arc::make_mut(saved_track).track_pos += new.len();
+        }
+        let added = new.len();
+        for (pos, mut track) in new.into_iter().enumerate().rev() {
+            Arc::make_mut(&mut track).track_pos = pos;
             saved.set.insert(track.id);
             saved.tracks.push_front(track);
         }
+        added
     }
 
     pub fn remove_track(&mut self, track_id: &TrackId) {
@@ -750,6 +767,25 @@ mod tests {
         assert!(state.common_ctx.downloaded.contains(&a.id));
         assert!(!state.common_ctx.downloaded.contains(&b.id));
         assert!(state.common_ctx.downloading.is_empty());
+    }
+
+    #[test]
+    fn add_tracks_puts_new_ones_on_top() {
+        let mut state = AppState::default_with_config(Config::default());
+        let saved = SavedTracks::new([track(1)].into_iter().collect());
+        state.with_library_mut(|library| library.saved_tracks.resolve_or_reject((), Ok(saved)));
+        let mut added = 0;
+        state.with_library_mut(|library| {
+            added = library.add_tracks([track(2), track(3), track(1), track(3)]);
+        });
+        assert_eq!(added, 2);
+        let saved = state.library.saved_tracks.resolved().unwrap();
+        let order: Vec<_> = saved.tracks.iter().map(|t| (t.id, t.track_pos)).collect();
+        assert_eq!(
+            order,
+            [(track(2).id, 0), (track(3).id, 1), (track(1).id, 2)]
+        );
+        assert_eq!(saved.set.len(), 3);
     }
 
     #[test]

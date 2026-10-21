@@ -936,3 +936,22 @@ fn diagnostics_followed_artists() {
     }
     assert!(artists.iter().all(|a| !a.id.is_empty() && !a.name.is_empty()));
 }
+
+/// Loads every saved track, whatever the paginated limit, in order.
+#[test]
+#[ignore]
+fn diagnostics_saved_tracks_count() {
+    let mut config = Config::load().expect("Psst config not found, log in first");
+    init(&mut config);
+    let started = std::time::Instant::now();
+    let tracks = WebApi::global().get_saved_tracks().expect("saved tracks");
+    println!(
+        "{} saved tracks in {:?} (paginated limit: {})",
+        tracks.len(),
+        started.elapsed(),
+        config.paginated_limit
+    );
+    assert!(tracks.iter().enumerate().all(|(i, t)| t.track_pos == i));
+    let unique: std::collections::HashSet<_> = tracks.iter().map(|t| t.id).collect();
+    println!("{} unique", unique.len());
+}

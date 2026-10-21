@@ -18,7 +18,7 @@ use crate::{
     widget::{icons, Async, Empty, MyWidgetExt, RemoteImage, ThemeScope},
 };
 
-use super::{playable, theme, track, utils};
+use super::{library, playable, theme, track, utils};
 
 pub const LOAD_LIST: Selector = Selector::new("app.playlist.load-list");
 pub const LOAD_DETAIL: Selector<(PlaylistLink, AppState)> =
@@ -581,6 +581,12 @@ fn playlist_menu_ctx(playlist: &WithCtx<Playlist>) -> Menu<AppState> {
             LocalizedString::new("menu-item-download").with_placeholder("Download for Offline"),
         )
         .command(cmd::DOWNLOAD_PLAYLIST.with(playlist.link())),
+    );
+    menu = menu.entry(
+        MenuItem::new(
+            LocalizedString::new("menu-item-like-all").with_placeholder("Like All Songs"),
+        )
+        .command(library::LIKE_PLAYLIST.with(playlist.link())),
     );
 
     if library.contains_playlist(playlist) {

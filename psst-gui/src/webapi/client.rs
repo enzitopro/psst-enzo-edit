@@ -39,8 +39,8 @@ use crate::{
     data::{
         self, utils::sanitize_html_string, Album, AlbumType, Artist, ArtistAlbums, ArtistInfo,
         ArtistLink, ArtistOverview, ArtistStats, AudioAnalysis, Cached, DatePrecision, Episode,
-        EpisodeId, EpisodeLink, Image, MixedView, Nav, Page, Playlist, PublicUser, SearchResults, SearchTopic, Show, SpotifyUrl,
-        Track, TrackLines, UserProfile,
+        EpisodeId, EpisodeLink, Image, MixedView, Nav, Page, Playlist, PublicUser, SearchResults,
+        SearchTopic, Show, SpotifyUrl, Track, TrackLines, UserProfile,
     },
     error::Error,
     ui::credits::TrackCredits,
@@ -126,11 +126,10 @@ impl WebApi {
     /// the Login5 access token from the core session plus a protobuf client
     /// token — the same credentials the web player and `Cdn` use.
     fn partner_token(&self) -> Result<(String, String), Error> {
-        let session = self
-            .session
-            .lock()
-            .clone()
-            .ok_or_else(|| Error::WebApiError("No active session for api-partner".to_string()))?;
+        let session =
+            self.session.lock().clone().ok_or_else(|| {
+                Error::WebApiError("No active session for api-partner".to_string())
+            })?;
         let access_token = self
             .login5
             .get_access_token(&session)
@@ -195,9 +194,9 @@ impl WebApi {
             if let Some(client_token) = client_token {
                 req = req.header("client-token", client_token);
             }
-            headers.iter().fold(
-                req, |current_req, (k, v)| current_req.header(k, v)
-            )
+            headers
+                .iter()
+                .fold(req, |current_req, (k, v)| current_req.header(k, v))
         }
 
         let ct = client_token.as_deref();
@@ -479,6 +478,43 @@ impl WebApi {
         Ok(results)
     }
 
+    /// Every page of a result set, ignoring the paginated limit.  Pages after the
+    /// first are fetched by a few threads at once, a page at a time is slow.
+    fn load_every_page<T: DeserializeOwned + Clone + Send + Sync>(
+        &self,
+        request: &RequestBuilder,
+    ) -> Result<Vector<T>, Error> {
+        const PAGE_SIZE: usize = 50;
+        const THREADS: usize = 4;
+
+        let page = |offset: usize| -> Result<Page<T>, Error> {
+            self.load(
+                &request
+                    .clone()
+                    .query("limit", PAGE_SIZE)
+                    .query("offset", offset),
+            )
+        };
+        let first = page(0)?;
+        let offsets: Vec<_> = (PAGE_SIZE..first.total).step_by(PAGE_SIZE).collect();
+        let per_thread = offsets.len().div_ceil(THREADS).max(1);
+        let rest = thread::scope(|scope| {
+            let threads: Vec<_> = offsets
+                .chunks(per_thread)
+                .map(|chunk| scope.spawn(|| chunk.iter().map(|&o| page(o)).collect::<Vec<_>>()))
+                .collect();
+            threads
+                .into_iter()
+                .flat_map(|thread| thread.join().expect("page thread panicked"))
+                .collect::<Result<Vec<_>, _>>()
+        })?;
+        let mut items = first.items;
+        for page in rest {
+            items.append(page.items);
+        }
+        Ok(items)
+    }
+
     /// Does a similar thing as `load_all_pages`, but limiting the number of results
     fn load_some_pages<T: DeserializeOwned + Clone>(
         &self,
@@ -494,7 +530,6 @@ impl WebApi {
 
         Ok(results)
     }
-
 
     fn load_and_return_home_section(&self, request: &RequestBuilder) -> Result<MixedView, Error> {
         #[derive(Deserialize)]
@@ -1589,8 +1624,10 @@ impl WebApi {
         }
         let request =
             &RequestBuilder::new("v1/me/tracks", Method::Get, None).query("market", "from_token");
+        // Every one, whatever the paginated limit: a liked track missing here showed
+        // as not liked (one account has 4000 of them, the limit was 500).
         Ok(self
-            .load_all_pages(request)?
+            .load_every_page(request)?
             .into_iter()
             .enumerate()
             .map(|(index, item): (usize, SavedTrack)| {
@@ -1624,6 +1661,23 @@ impl WebApi {
         // `PUT /v1/me/tracks` answers 403 now.
         let request = &library_request(Method::Put, &format!("spotify:track:{id}"));
         self.send_empty_json(request)
+    }
+
+    /// Adds tracks to Liked Songs, 40 per request (the endpoint's limit).
+    pub fn save_tracks(&self, tracks: &[Arc<Track>]) -> Result<(), Error> {
+        for chunk in tracks.chunks(40) {
+            let uris: Vec<_> = chunk
+                .iter()
+                .map(|track| {
+                    urlencoding::encode(&format!("spotify:track:{}", track.id.0.to_base62()))
+                        .into_owned()
+                })
+                .collect();
+            let request = &RequestBuilder::new("v1/me/library", Method::Put, None)
+                .query("uris", uris.join(","));
+            self.send_empty_json(request)?;
+        }
+        Ok(())
     }
 
     // https://developer.spotify.com/documentation/web-api/reference/remove-from-library/
@@ -2297,7 +2351,12 @@ mod load_cached_tests {
 
         // Too old to trust, but better than nothing when the refresh fails.
         let old = SystemTime::now() - Duration::from_secs(30 * 24 * 60 * 60);
-        fs::File::options().write(true).open(&path).unwrap().set_modified(old).unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
         assert_eq!(load().unwrap().data, "recent");
 
         // A copy cut short is ignored instead of failing forever.

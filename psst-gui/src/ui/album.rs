@@ -223,6 +223,12 @@ fn album_menu(album: &Arc<Album>, library: &Arc<Library>) -> Menu<AppState> {
         )
         .command(cmd::DOWNLOAD_ALBUM.with(album.link())),
     );
+    menu = menu.entry(
+        MenuItem::new(
+            LocalizedString::new("menu-item-like-all").with_placeholder("Like All Songs"),
+        )
+        .command(library::LIKE_ALBUM.with(album.link())),
+    );
 
     menu = menu.separator();
 

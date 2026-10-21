@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use druid::{
+    im::Vector,
     widget::{Flex, List},
     LensExt, Selector, Widget, WidgetExt,
 };
@@ -8,9 +9,10 @@ use druid::{
 use crate::{
     cmd,
     data::{
-        Album, AlbumLink, AppState, Ctx, Library, Nav, SavedAlbums, SavedTracks, Show, ShowLink,
-        Track, TrackId,
+        Album, AlbumLink, AppState, Ctx, Library, Nav, PlaylistLink, SavedAlbums, SavedTracks,
+        Show, ShowLink, Track, TrackId,
     },
+    error::Error,
     ui::home::{shows_that_you_might_like, your_shows},
     webapi::WebApi,
     widget::{Async, Empty, MyWidgetExt},
@@ -24,6 +26,9 @@ pub const LOAD_ARTISTS: Selector = Selector::new("app.library.load-artists");
 pub const LOAD_SHOWS: Selector = Selector::new("app.library.load-shows");
 
 pub const SAVE_TRACK: Selector<Arc<Track>> = Selector::new("app.library.save-track");
+/// Like every track of a playlist or an album.
+pub const LIKE_PLAYLIST: Selector<PlaylistLink> = Selector::new("app.library.like-playlist");
+pub const LIKE_ALBUM: Selector<AlbumLink> = Selector::new("app.library.like-album");
 pub const UNSAVE_TRACK: Selector<TrackId> = Selector::new("app.library.unsave-track");
 
 pub const SAVE_ALBUM: Selector<Arc<Album>> = Selector::new("app.library.save-album");
@@ -76,10 +81,48 @@ pub fn followed_artists_widget() -> impl Widget<AppState> {
     )
 }
 
+/// Likes the fetched tracks, leaving out local files (they aren't on Spotify).
+fn like_all(tracks: Result<Vector<Arc<Track>>, Error>) -> Result<Vector<Arc<Track>>, Error> {
+    let tracks: Vector<_> = tracks?.into_iter().filter(|t| !t.is_local).collect();
+    WebApi::global().save_tracks(&tracks.iter().cloned().collect::<Vec<_>>())?;
+    Ok(tracks)
+}
+
+fn liked_all(data: &mut AppState, result: Result<Vector<Arc<Track>>, Error>) {
+    match result {
+        Ok(tracks) => {
+            let mut added = 0;
+            data.with_library_mut(|library| added = library.add_tracks(tracks));
+            data.info_alert(format!("Added {added} songs to Liked Songs"));
+        }
+        Err(err) => data.error_alert(format!("Couldn't like the songs: {err}")),
+    }
+}
+
 /// Loads and changes the saved tracks.  Shows nothing, but is always there: the
 /// Saved Tracks page isn't, so liking a track from another page used to do nothing.
 pub fn saved_tracks_loader() -> impl Widget<AppState> {
     Empty
+        .on_command_async(
+            LIKE_PLAYLIST,
+            |link| like_all(WebApi::global().get_playlist_tracks(&link.id)),
+            |_, data: &mut AppState, link| {
+                data.info_alert(format!("Adding \"{}\" to Liked Songs…", link.name))
+            },
+            |_, data, (_, result)| liked_all(data, result),
+        )
+        .on_command_async(
+            LIKE_ALBUM,
+            |link| {
+                like_all(
+                    WebApi::global()
+                        .get_album(&link.id)
+                        .map(|a| a.data.tracks.clone()),
+                )
+            },
+            |_, data, link| data.info_alert(format!("Adding \"{}\" to Liked Songs…", link.name)),
+            |_, data, (_, result)| liked_all(data, result),
+        )
         .on_command_async(
             LOAD_TRACKS,
             |_| WebApi::global().get_saved_tracks().map(SavedTracks::new),
