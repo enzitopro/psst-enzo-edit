@@ -10,8 +10,8 @@ pub struct ArtistDetail {
     pub artist: Promise<Artist, ArtistLink>,
     pub albums: Promise<ArtistAlbums, ArtistLink>,
     pub overview: Promise<Cached<ArtistOverview>, ArtistLink>,
-    /// Tracks of the artist that play without a connection.
-    pub downloaded: Promise<Vector<Arc<Track>>, ArtistLink>,
+    /// The artist's tracks in the library.
+    pub saved_tracks: Vector<Arc<Track>>,
 }
 
 #[derive(Clone, Data, Lens, Deserialize)]

@@ -225,9 +225,14 @@ pub fn artwork_widget() -> impl Widget<AppState> {
 }
 
 fn root_widget() -> impl Widget<AppState> {
-    let playlists = Scroll::new(playlist::list_widget())
-        .vertical()
-        .expand_height();
+    let playlists = Scroll::new(
+        Flex::column()
+            .cross_axis_alignment(CrossAxisAlignment::Start)
+            .with_child(playlist::list_widget())
+            .with_child(library::saved_artists_widget()),
+    )
+    .vertical()
+    .expand_height();
 
     let playlists = Flex::column()
         .must_fill_main_axis(true)

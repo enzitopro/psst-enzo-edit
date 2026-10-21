@@ -3,7 +3,7 @@ use druid::widget::{prelude::*, Controller};
 use crate::{
     cmd,
     data::AppState,
-    ui::{home, playlist, user},
+    ui::{home, library, playlist, user},
 };
 
 pub struct SessionController;
@@ -19,6 +19,8 @@ impl SessionController {
 
         // Reload the global, usually visible data.
         ctx.submit_command(playlist::LOAD_LIST);
+        // Also feeds the sidebar artists and the like buttons.
+        ctx.submit_command(library::LOAD_TRACKS);
         ctx.submit_command(home::LOAD_MADE_FOR_YOU);
         ctx.submit_command(user::LOAD_PROFILE);
     }

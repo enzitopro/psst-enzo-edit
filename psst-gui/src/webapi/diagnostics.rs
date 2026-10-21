@@ -565,9 +565,7 @@ fn diagnostics_download_for_offline() {
 
     // The startup scan finds them.
     let found = psst_core::player::item::downloaded_tracks(&cache, &config.playback());
-    assert!(items
-        .iter()
-        .all(|item| found.iter().any(|(id, _)| *id == item.item_id)));
+    assert!(items.iter().all(|item| found.contains(&item.item_id)));
 
     // No session config: any network access fails, so these must come from the cache.
     let offline = SessionService::empty();
@@ -923,25 +921,4 @@ fn diagnostics_lastfm_signature() {
     println!("auth.getSession with a bad token: {result:?}");
     let err = result.unwrap_err().to_string();
     assert!(!err.contains("signature"), "{err}");
-}
-
-/// Lists the downloaded tracks by artist, from the real cache.
-#[test]
-#[ignore]
-fn diagnostics_downloaded_by_artist() {
-    let config = Config::load().expect("Psst config not found, log in first");
-    let cache = psst_core::cache::Cache::new(Config::cache_dir().unwrap()).unwrap();
-    let tracks = psst_core::player::item::downloaded_tracks(&cache, &config.playback());
-    let mut by_artist = std::collections::BTreeMap::<String, usize>::new();
-    for (id, metadata) in &tracks {
-        let track = Track::from_metadata(*id, metadata);
-        assert!(!track.name.is_empty() && !track.artists.is_empty());
-        *by_artist.entry(track.artists[0].name.to_string()).or_default() += 1;
-    }
-    println!("{} downloaded tracks; top artists:", tracks.len());
-    let mut counts: Vec<_> = by_artist.into_iter().collect();
-    counts.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
-    for (artist, count) in counts.iter().take(5) {
-        println!("  {artist}: {count}");
-    }
 }

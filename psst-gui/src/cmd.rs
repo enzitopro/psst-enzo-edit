@@ -55,6 +55,9 @@ pub const PLAYBACK_SKIPPED: Selector<(ItemId, String)> = Selector::new("app.play
 // Offline downloads: save the tracks into the cache, so they play without a connection.
 pub const DOWNLOAD_PLAYLIST: Selector<PlaylistLink> = Selector::new("app.download-playlist");
 pub const DOWNLOAD_ALBUM: Selector<AlbumLink> = Selector::new("app.download-album");
+/// A name for the alerts, and the tracks.
+pub const DOWNLOAD_TRACKS: Selector<(Arc<str>, Vector<Arc<Track>>)> =
+    Selector::new("app.download-tracks");
 /// Tracks found in the cache at startup, tracks queued for download, and the
 /// result for each one.
 pub const DOWNLOADED_TRACKS: Selector<Vec<TrackId>> = Selector::new("app.downloaded-tracks");

@@ -106,7 +106,7 @@ impl PlaybackController {
             move || {
                 let tracks: Vec<_> = downloaded_tracks(&cache, &config)
                     .into_iter()
-                    .map(|(id, _)| TrackId(id))
+                    .map(TrackId)
                     .collect();
                 let _ = event_sink.submit_command(cmd::DOWNLOADED_TRACKS, tracks, widget_id);
             }
@@ -615,6 +615,12 @@ where
                 self.download(ctx, playlist, move || {
                     WebApi::global().get_playlist_tracks(&link.id)
                 });
+                ctx.set_handled();
+            }
+            Event::Command(cmd) if cmd.is(cmd::DOWNLOAD_TRACKS) => {
+                let (name, tracks) = cmd.get_unchecked(cmd::DOWNLOAD_TRACKS).clone();
+                data.info_alert(format!("Downloading \"{name}\" for offline listening…"));
+                self.download(ctx, None, move || Ok(tracks));
                 ctx.set_handled();
             }
             Event::Command(cmd) if cmd.is(cmd::DOWNLOAD_ALBUM) => {

@@ -158,7 +158,7 @@ impl AppState {
                 artist: Promise::Empty,
                 albums: Promise::Empty,
                 overview: Promise::Empty,
-                downloaded: Promise::Empty,
+                saved_tracks: Vector::new(),
             },
             playlist_detail: PlaylistDetail {
                 playlist: Promise::Empty,
@@ -326,6 +326,20 @@ impl AppState {
     pub fn with_library_mut(&mut self, func: impl FnOnce(&mut Library)) {
         func(Arc::make_mut(&mut self.library));
         self.library_updated();
+        self.refresh_artist_saved_tracks();
+    }
+
+    /// The open artist's tracks in the library, for the artist page.
+    pub fn refresh_artist_saved_tracks(&mut self) {
+        self.artist_detail.saved_tracks = match (&self.nav, self.library.saved_tracks.resolved()) {
+            (Nav::ArtistDetail(artist), Some(saved)) => saved
+                .tracks
+                .iter()
+                .filter(|track| track.artists.iter().any(|a| a.id == artist.id))
+                .cloned()
+                .collect(),
+            _ => Vector::new(),
+        };
     }
 
     fn library_updated(&mut self) {
@@ -411,6 +425,7 @@ impl Library {
             Arc::make_mut(&mut track).track_pos = 0;
             saved.set.insert(track.id);
             saved.tracks.push_front(track);
+            saved.artists = count_artists(&saved.tracks);
         }
     }
 
@@ -418,6 +433,7 @@ impl Library {
         if let Some(saved) = self.saved_tracks.resolved_mut() {
             saved.set.remove(track_id);
             saved.tracks.retain(|t| &t.id != track_id);
+            saved.artists = count_artists(&saved.tracks);
         }
     }
 
@@ -562,13 +578,40 @@ impl Default for Library {
 pub struct SavedTracks {
     pub tracks: Vector<Arc<Track>>,
     pub set: HashSet<TrackId>,
+    /// Artists of the tracks and how many tracks each has, most first.
+    pub artists: Vector<(ArtistLink, usize)>,
 }
 
 impl SavedTracks {
     pub fn new(tracks: Vector<Arc<Track>>) -> Self {
         let set = tracks.iter().map(|t| t.id).collect();
-        Self { tracks, set }
+        let artists = count_artists(&tracks);
+        Self {
+            tracks,
+            set,
+            artists,
+        }
     }
+}
+
+fn count_artists(tracks: &Vector<Arc<Track>>) -> Vector<(ArtistLink, usize)> {
+    let mut counts = std::collections::HashMap::<Arc<str>, (ArtistLink, usize)>::new();
+    // Local files have artists without an id, there's no page to open for them.
+    for artist in tracks
+        .iter()
+        .flat_map(|t| &t.artists)
+        .filter(|a| !a.id.is_empty())
+    {
+        counts
+            .entry(artist.id.clone())
+            .or_insert((artist.clone(), 0))
+            .1 += 1;
+    }
+    let mut artists: Vec<_> = counts.into_values().collect();
+    artists.sort_by_cached_key(|(artist, count)| {
+        (std::cmp::Reverse(*count), artist.name.to_lowercase())
+    });
+    artists.into()
 }
 
 #[derive(Clone, Default, Data, Lens)]
@@ -736,6 +779,45 @@ mod tests {
     }
 
     #[test]
+    fn saved_artists_and_artist_page_tracks() {
+        let artist = |id: &str| ArtistLink {
+            id: id.into(),
+            name: id.to_uppercase().into(),
+        };
+        let by = |id: u128, artists: &[&str]| {
+            let mut t = track(id);
+            Arc::make_mut(&mut t).artists = artists.iter().map(|a| artist(a)).collect();
+            t
+        };
+        let mut state = AppState::default_with_config(Config::default());
+        let tracks = [
+            by(1, &["b"]),
+            by(2, &["a", "b"]),
+            by(3, &["a"]),
+            by(4, &[""]),
+        ];
+        let saved = SavedTracks::new(tracks.into_iter().collect());
+        let counts: Vec<_> = saved.artists.iter().map(|(a, n)| (&*a.id, *n)).collect();
+        // Most tracks first, then by name; local artists without an id left out.
+        assert_eq!(counts, [("a", 2), ("b", 2)]);
+
+        state.nav = Nav::ArtistDetail(artist("a"));
+        state.with_library_mut(|library| library.saved_tracks.resolve_or_reject((), Ok(saved)));
+        let ids: Vec<_> = state
+            .artist_detail
+            .saved_tracks
+            .iter()
+            .map(|t| t.id)
+            .collect();
+        assert_eq!(ids, [by(2, &[]).id, by(3, &[]).id]);
+
+        state.with_library_mut(|library| library.remove_track(&by(3, &[]).id));
+        assert_eq!(state.artist_detail.saved_tracks.len(), 1);
+        let saved = state.library.saved_tracks.resolved().unwrap();
+        assert_eq!(saved.artists[0], (artist("b"), 2));
+    }
+
+    #[test]
     fn offline_playlist() {
         let playlist: Playlist = serde_json::from_value(serde_json::json!({
             "id": "p", "name": "P", "description": "", "tracks": {"total": 2},
@@ -753,7 +835,9 @@ mod tests {
         common.downloaded.insert(b);
         assert!(common.is_offline(&playlist));
         // A track was added since the download.
-        common.offline_playlists.insert(playlist.id.clone(), (1, [a, b].into_iter().collect()));
+        common
+            .offline_playlists
+            .insert(playlist.id.clone(), (1, [a, b].into_iter().collect()));
         assert!(!common.is_offline(&playlist));
     }
 }
