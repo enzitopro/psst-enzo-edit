@@ -145,7 +145,7 @@ impl NowPlaying {
     }
 }
 
-#[derive(Clone, Debug, Data)]
+#[derive(Clone, Debug, Data, PartialEq)]
 pub enum PlaybackOrigin {
     Home,
     Library,

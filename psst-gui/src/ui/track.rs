@@ -11,8 +11,8 @@ use psst_core::{audio::normalize::NormalizationLevel, player::item::PlaybackItem
 use crate::{
     cmd,
     data::{
-        AppState, Library, Nav, Playable, PlaybackOrigin, PlaylistAddTrack, PlaylistRemoveTrack,
-        QueueEntry, Track,
+        AppState, Library, Nav, PlaybackOrigin, PlaylistAddTrack, PlaylistRemoveTrack, QueueEntry,
+        Track,
     },
     ui::playlist,
     widget::{fill_between::FillBetween, icons, Empty, MyWidgetExt, RemoteImage},
@@ -238,12 +238,15 @@ pub fn playable_widget(display: Display) -> impl Widget<PlayRow<Arc<Track>>> {
             if let Nav::AlbumDetail(_, Some(target_id)) = &row.ctx.nav {
                 return *target_id == row.item.id;
             }
-            // Otherwise check if it's playing or is the current track
-            row.is_playing || row.ctx.now_playing.as_ref().is_some_and(|playable| {
-                matches!(playable, Playable::Track(track) if track.id == row.item.id)
-            })
+            row.is_playing
         })
         .rounded(theme::BUTTON_BORDER_RADIUS)
+        // Follows the playing track down the list, when the list is on screen.
+        .on_update(|ctx, old: &PlayRow<Arc<Track>>, row, _| {
+            if row.is_playing && !old.is_playing {
+                ctx.scroll_to_view();
+            }
+        })
         .context_menu(track_row_menu)
 }
 

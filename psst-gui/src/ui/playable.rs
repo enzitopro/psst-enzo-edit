@@ -234,7 +234,7 @@ where
         self.data.for_each(|item, position| {
             cb(
                 &PlayRow {
-                    is_playing: self.ctx.is_playing(&item),
+                    is_playing: self.ctx.is_playing(&item, &origin),
                     ctx: self.ctx.to_owned(),
                     origin: origin.clone(),
                     item,
@@ -250,7 +250,7 @@ where
         self.data.for_each(|item, position| {
             cb(
                 &mut PlayRow {
-                    is_playing: self.ctx.is_playing(&item),
+                    is_playing: self.ctx.is_playing(&item, &origin),
                     ctx: self.ctx.to_owned(),
                     origin: origin.clone(),
                     item,

@@ -289,7 +289,8 @@ impl AppState {
     }
 
     pub fn start_playback(&mut self, item: Playable, origin: PlaybackOrigin, progress: Duration) {
-        self.common_ctx_mut().now_playing.replace(item.clone());
+        let playing = (item.clone(), origin.clone());
+        self.common_ctx_mut().now_playing.replace(playing);
         self.playback.state = PlaybackState::Playing;
         self.playback.now_playing.replace(NowPlaying {
             item,
@@ -648,7 +649,8 @@ impl Shows {
 
 #[derive(Clone, Data)]
 pub struct CommonCtx {
-    pub now_playing: Option<Playable>,
+    /// The playing item, and the list it plays from.
+    pub now_playing: Option<(Playable, PlaybackOrigin)>,
     pub library: Arc<Library>,
     pub show_track_cover: bool,
     pub nav: Nav,
@@ -661,8 +663,10 @@ pub struct CommonCtx {
 }
 
 impl CommonCtx {
-    pub fn is_playing(&self, item: &Playable) -> bool {
-        matches!(&self.now_playing, Some(i) if i.same(item))
+    /// Whether `item` of the list `origin` plays: the same track in another
+    /// album or playlist doesn't count.
+    pub fn is_playing(&self, item: &Playable, origin: &PlaybackOrigin) -> bool {
+        matches!(&self.now_playing, Some((playing, from)) if playing.id() == item.id() && from == origin)
     }
 
     /// Whether the whole playlist plays without a connection.  A changed track
@@ -797,6 +801,25 @@ mod tests {
         assert_eq!(state.current_sort(), by_title);
         state.navigate(&Nav::SavedTracks);
         assert_eq!(state.current_sort(), Default::default());
+    }
+
+    #[test]
+    fn playing_track_shows_only_in_its_own_list() {
+        let mut state = AppState::default_with_config(Config::default());
+        let link = PlaylistLink {
+            id: "p".into(),
+            name: "P".into(),
+        };
+        let playlist = PlaybackOrigin::Playlist(link);
+        let playing = track(1);
+        let item = Playable::Track(playing.clone());
+        state.start_playback(item, playlist.clone(), Duration::ZERO);
+        // A reloaded list has other copies of the same track.
+        let copy = Playable::Track(Arc::new((*playing).clone()));
+        assert!(state.common_ctx.is_playing(&copy, &playlist));
+        assert!(!state.common_ctx.is_playing(&copy, &PlaybackOrigin::Library));
+        let other = Playable::Track(track(2));
+        assert!(!state.common_ctx.is_playing(&other, &playlist));
     }
 
     #[test]
