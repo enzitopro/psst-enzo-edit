@@ -129,6 +129,9 @@ pub struct Config {
     credentials: Option<Credentials>,
     pub audio_quality: AudioQuality,
     pub theme: Theme,
+    /// Light or dark as Windows apps are, instead of `theme`.  A field of its
+    /// own: an unknown `theme` value would make older builds drop the config.
+    pub theme_follows_windows: bool,
     pub volume: f64,
     pub last_route: Option<Nav>,
     pub queue_behavior: QueueBehavior,
@@ -166,6 +169,7 @@ impl Default for Config {
             credentials: Default::default(),
             audio_quality: Default::default(),
             theme: Default::default(),
+            theme_follows_windows: true,
             volume: 1.0,
             last_route: Default::default(),
             queue_behavior: Default::default(),

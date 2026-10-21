@@ -2,7 +2,7 @@ use druid::{Color, Env, FontDescriptor, FontFamily, FontWeight, Insets, Key, Siz
 
 pub use druid::theme::*;
 
-use crate::data::{AppState, Theme};
+use crate::data::{AppState, Config, Theme};
 
 pub fn grid(m: f64) -> f64 {
     GRID * m
@@ -42,11 +42,46 @@ pub const LINK_HOT_COLOR: Key<Color> = Key::new("app.link-hot-color");
 pub const LINK_ACTIVE_COLOR: Key<Color> = Key::new("app.link-active-color");
 pub const LINK_COLD_COLOR: Key<Color> = Key::new("app.link-cold-color");
 
-pub fn setup(env: &mut Env, state: &AppState) {
-    match state.config.theme {
-        Theme::Light => setup_light_theme(env),
-        Theme::Dark => setup_dark_theme(env),
+/// Whether the configured theme is dark right now.
+pub fn is_dark(config: &Config) -> bool {
+    if config.theme_follows_windows {
+        windows_prefers_dark()
+    } else {
+        config.theme == Theme::Dark
+    }
+}
+
+/// Windows' "Choose your app mode" setting, light when it can't be read.
+fn windows_prefers_dark() -> bool {
+    use windows_sys::Win32::System::Registry::{
+        RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_DWORD,
     };
+    let wide = |s: &str| s.encode_utf16().chain([0]).collect::<Vec<u16>>();
+    let key = wide(r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize");
+    let value = wide("AppsUseLightTheme");
+    let (mut light, mut size) = (1u32, 4u32);
+    // SAFETY: both names end in a null, and `light` has room for the DWORD asked for.
+    let status = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            key.as_ptr(),
+            value.as_ptr(),
+            RRF_RT_REG_DWORD,
+            std::ptr::null_mut(),
+            (&mut light as *mut u32).cast(),
+            &mut size,
+        )
+    };
+    status == 0 && light == 0
+}
+
+pub fn setup(env: &mut Env, state: &AppState) {
+    let dark = is_dark(&state.config);
+    if dark {
+        setup_dark_theme(env);
+    } else {
+        setup_light_theme(env);
+    }
 
     env.set(WINDOW_BACKGROUND_COLOR, env.get(GREY_700));
     env.set(TEXT_COLOR, env.get(GREY_100));
@@ -60,15 +95,12 @@ pub fn setup(env: &mut Env, state: &AppState) {
     env.set(FOREGROUND_LIGHT, env.get(GREY_100));
     env.set(FOREGROUND_DARK, env.get(GREY_000));
 
-    match state.config.theme {
-        Theme::Light => {
-            env.set(BUTTON_LIGHT, env.get(GREY_700));
-            env.set(BUTTON_DARK, env.get(GREY_600));
-        }
-        Theme::Dark => {
-            env.set(BUTTON_LIGHT, env.get(GREY_600));
-            env.set(BUTTON_DARK, env.get(GREY_700));
-        }
+    if dark {
+        env.set(BUTTON_LIGHT, env.get(GREY_600));
+        env.set(BUTTON_DARK, env.get(GREY_700));
+    } else {
+        env.set(BUTTON_LIGHT, env.get(GREY_700));
+        env.set(BUTTON_DARK, env.get(GREY_600));
     }
 
     env.set(BORDER_LIGHT, env.get(GREY_400));
@@ -164,4 +196,25 @@ fn setup_dark_theme(env: &mut Env) {
     env.set(LINK_HOT_COLOR, Color::rgba(1.0, 1.0, 1.0, 0.05));
     env.set(LINK_ACTIVE_COLOR, Color::rgba(1.0, 1.0, 1.0, 0.025));
     env.set(LINK_COLD_COLOR, Color::rgba(1.0, 1.0, 1.0, 0.0));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reads_the_windows_app_mode() {
+        let output = std::process::Command::new("reg")
+            .args([
+                "query",
+                r"HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
+                "/v",
+                "AppsUseLightTheme",
+            ])
+            .output()
+            .unwrap();
+        // Missing (as on CI) reads as light.
+        let dark = String::from_utf8_lossy(&output.stdout).contains("0x0\r");
+        assert_eq!(windows_prefers_dark(), dark);
+    }
 }

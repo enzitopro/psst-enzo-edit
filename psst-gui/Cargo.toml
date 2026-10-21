@@ -27,6 +27,7 @@ rand = { version = "0.9.1" }
 regex = { version = "1.11.1" }
 serde = { version = "1.0.219", features = ["derive", "rc"] }
 serde_json = { version = "1.0.140" }
+windows-sys = { version = "0.59", features = ["Win32_System_Registry"] }
 threadpool = { version = "1.8.1" }
 time = { version = "0.3.41", features = ["macros", "formatting"] }
 time-humanize = { version = "0.1.3" }

@@ -8,7 +8,7 @@ use crate::{
         config::LocalFilesStatus, AppState, AudioQuality, Authentication, Config, Preferences,
         PreferencesTab, Promise, SliderScrollScale, Theme,
     },
-    widget::{icons, Async, Border, Checkbox, MyWidgetExt},
+    widget::{icons, Async, Border, Checkbox, Empty, MyWidgetExt},
 };
 use druid::{
     commands,
@@ -191,9 +191,16 @@ fn general_tab_widget() -> impl Widget<AppState> {
         .with_child(Label::new("Theme").with_font(theme::UI_FONT_MEDIUM))
         .with_spacer(theme::grid(2.0))
         .with_child(
+            Checkbox::new("Same as Windows")
+                .lens(AppState::config.then(Config::theme_follows_windows)),
+        )
+        .with_spacer(theme::grid(1.0))
+        .with_child(Either::new(
+            |data: &AppState, _| data.config.theme_follows_windows,
+            Empty,
             RadioGroup::column(vec![("Light", Theme::Light), ("Dark", Theme::Dark)])
                 .lens(AppState::config.then(Config::theme)),
-        );
+        ));
 
     col = col.with_spacer(theme::grid(1.5));
 
