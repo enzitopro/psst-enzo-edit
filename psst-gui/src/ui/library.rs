@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use druid::{
     im::Vector,
-    widget::{Flex, List},
+    widget::{Either, Flex, Label, List},
     LensExt, Selector, Widget, WidgetExt,
 };
 
@@ -15,10 +15,10 @@ use crate::{
     error::Error,
     ui::home::{shows_that_you_might_like, your_shows},
     webapi::WebApi,
-    widget::{Async, Empty, MyWidgetExt},
+    widget::{Async, Empty, MyWidgetExt, Wrap},
 };
 
-use super::{album, artist, playable, track, utils};
+use super::{album, artist, playable, theme, track, utils};
 
 pub const LOAD_TRACKS: Selector = Selector::new("app.library.load-tracks");
 pub const LOAD_ALBUMS: Selector = Selector::new("app.library.load-albums");
@@ -65,20 +65,56 @@ pub fn saved_tracks_widget() -> impl Widget<AppState> {
     )
 }
 
-/// The artists the user follows; each opens their saved songs.
+/// The artists the user follows, as a list or a grid of pictures; each opens
+/// their saved songs.
 pub fn followed_artists_widget() -> impl Widget<AppState> {
-    Async::new(
-        utils::spinner_widget,
-        || List::new(|| artist::artist_widget(false, Nav::ArtistSavedTracks)),
-        utils::error_widget,
-    )
-    .lens(AppState::library.then(Library::followed_artists.in_arc()))
-    .on_command_async(
-        LOAD_ARTISTS,
-        |_| WebApi::global().get_followed_artists(),
-        |_, data, _| data.with_library_mut(|library| library.followed_artists.defer_default()),
-        |_, data, r| data.with_library_mut(|library| library.followed_artists.update(r)),
-    )
+    let artists = |grid: bool| {
+        Async::new(
+            utils::spinner_widget,
+            move || {
+                if grid {
+                    Wrap::new(|| artist::artist_widget(true, Nav::ArtistSavedTracks))
+                        .with_spacing(theme::grid(1.0))
+                        .boxed()
+                } else {
+                    List::new(|| artist::artist_widget(false, Nav::ArtistSavedTracks)).boxed()
+                }
+            },
+            utils::error_widget,
+        )
+        .lens(AppState::library.then(Library::followed_artists.in_arc()))
+    };
+    let toggle = Label::dynamic(|data: &AppState, _| {
+        if data.config.artists_grid {
+            "Show as List".to_string()
+        } else {
+            "Show as Grid".to_string()
+        }
+    })
+    .with_text_size(theme::TEXT_SIZE_SMALL)
+    .link()
+    .on_left_click(|_, _, data: &mut AppState, _| {
+        data.config.artists_grid = !data.config.artists_grid;
+    });
+    Flex::column()
+        .with_child(
+            Flex::row()
+                .must_fill_main_axis(true)
+                .with_flex_spacer(1.0)
+                .with_child(toggle),
+        )
+        .with_default_spacer()
+        .with_child(Either::new(
+            |data: &AppState, _| data.config.artists_grid,
+            artists(true),
+            artists(false),
+        ))
+        .on_command_async(
+            LOAD_ARTISTS,
+            |_| WebApi::global().get_followed_artists(),
+            |_, data, _| data.with_library_mut(|library| library.followed_artists.defer_default()),
+            |_, data, r| data.with_library_mut(|library| library.followed_artists.update(r)),
+        )
 }
 
 /// Likes the fetched tracks, leaving out local files (they aren't on Spotify).

@@ -11,6 +11,7 @@ mod promise;
 pub mod remote_image;
 mod theme;
 mod utils;
+mod wrap;
 
 use std::{sync::Arc, time::Duration};
 
@@ -31,6 +32,7 @@ pub use promise::Async;
 pub use remote_image::RemoteImage;
 pub use theme::ThemeScope;
 pub use utils::{Border, Clip, FadeOut, Logger};
+pub use wrap::Wrap;
 
 use crate::{
     controller::{ExClick, ExCursor, ExScroll, OnCommand, OnCommandAsync, OnDebounce, OnUpdate},
