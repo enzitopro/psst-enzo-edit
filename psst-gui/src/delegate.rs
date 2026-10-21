@@ -1,7 +1,7 @@
 use directories::UserDirs;
 use druid::{
-    commands, AppDelegate, Application, Code, Command, DelegateCtx, Env, Event, Handled,
-    KeyEvent, Target, WindowDesc, WindowId,
+    commands, AppDelegate, Application, Code, Command, DelegateCtx, Env, Event, Handled, KeyEvent,
+    Target, WindowDesc, WindowId,
 };
 use std::fs;
 use threadpool::ThreadPool;
@@ -13,7 +13,7 @@ use crate::ui::theme;
 use crate::ui::DOWNLOAD_ARTWORK;
 use crate::{
     cmd,
-    data::{AppState, Config, Nav},
+    data::{AppState, Config, Nav, SavedPlayback},
     ui,
     webapi::WebApi,
     widget::remote_image,
@@ -261,6 +261,7 @@ impl AppDelegate<AppState> for Delegate {
                 data.config.store_webapi_token(token);
             }
             data.config.save();
+            SavedPlayback::save(&data.playback);
             ctx.submit_command(commands::CLOSE_ALL_WINDOWS);
             ctx.submit_command(commands::QUIT_APP);
         }
@@ -387,7 +388,10 @@ mod tests {
         };
         let nav = |code, mods| shortcut(&key(code, mods))?.get(cmd::NAVIGATE).cloned();
         assert_eq!(nav(Code::Digit1, Modifiers::CONTROL), Some(Nav::Home));
-        assert_eq!(nav(Code::Digit4, Modifiers::CONTROL), Some(Nav::SavedArtists));
+        assert_eq!(
+            nav(Code::Digit4, Modifiers::CONTROL),
+            Some(Nav::SavedArtists)
+        );
         assert!(shortcut(&key(Code::Digit1, Modifiers::empty())).is_none());
         assert!(shortcut(&key(Code::Digit1, Modifiers::CONTROL | Modifiers::ALT)).is_none());
         assert!(shortcut(&key(Code::KeyF, Modifiers::CONTROL))

@@ -10,7 +10,7 @@ use std::{
 use druid::{im::Vector, Data, Lens};
 use sanitize_html::rules::predefined::DEFAULT;
 use sanitize_html::sanitize_str;
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use time::{Date, Month};
 
 #[derive(Clone, Data, Lens)]
@@ -94,6 +94,13 @@ where
     let secs = f64::deserialize(deserializer)?;
     let duration = Duration::from_secs_f64(secs);
     Ok(duration)
+}
+
+pub fn serialize_millis<S: Serializer>(
+    duration: &Duration,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.serialize_u64(duration.as_millis() as u64)
 }
 
 pub fn deserialize_millis<'de, D>(deserializer: D) -> Result<Duration, D::Error>

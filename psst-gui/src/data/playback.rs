@@ -1,11 +1,18 @@
-use std::{fmt, sync::Arc, time::Duration};
+use std::{
+    fmt,
+    fs::{self, File},
+    io::{self, BufReader},
+    path::PathBuf,
+    sync::Arc,
+    time::Duration,
+};
 
 use druid::{im::Vector, Data, Lens};
 use druid_enums::Matcher;
 use psst_core::item_id::ItemId;
 use serde::{Deserialize, Serialize};
 
-use super::{AlbumLink, Episode, Library, Nav, PlaylistLink, ShowLink, Track};
+use super::{AlbumLink, Config, Episode, Library, Nav, PlaylistLink, ShowLink, Track};
 
 #[derive(Clone, Data, Lens)]
 pub struct Playback {
@@ -145,7 +152,7 @@ impl NowPlaying {
     }
 }
 
-#[derive(Clone, Debug, Data, PartialEq)]
+#[derive(Clone, Debug, Data, PartialEq, Serialize, Deserialize)]
 pub enum PlaybackOrigin {
     Home,
     Library,
@@ -177,6 +184,61 @@ impl fmt::Display for PlaybackOrigin {
             PlaybackOrigin::Playlist(link) => link.name.fmt(f),
             PlaybackOrigin::Show(link) => link.name.fmt(f),
             PlaybackOrigin::Search(query) => query.fmt(f),
+        }
+    }
+}
+
+/// The queue when Psst closed, to pick up from there.  Episodes aren't kept.
+#[derive(Serialize, Deserialize)]
+pub struct SavedPlayback {
+    pub origin: PlaybackOrigin,
+    pub tracks: Vec<Arc<Track>>,
+    /// Of the playing track in `tracks`.
+    pub position: usize,
+    pub progress_ms: u64,
+}
+
+impl SavedPlayback {
+    fn path() -> Option<PathBuf> {
+        Config::config_dir().map(|dir| dir.join("playback.json"))
+    }
+
+    pub fn load() -> Option<Self> {
+        let file = File::open(Self::path()?).ok()?;
+        serde_json::from_reader(BufReader::new(file)).ok()
+    }
+
+    pub(super) fn of(playback: &Playback) -> Option<Self> {
+        let now_playing = playback.now_playing.as_ref()?;
+        let playing = now_playing.item.track()?;
+        let tracks: Vec<_> = playback
+            .queue
+            .iter()
+            .filter_map(|entry| entry.item.track().cloned())
+            .collect();
+        Some(Self {
+            origin: now_playing.origin.clone(),
+            position: tracks.iter().position(|track| track.id == playing.id)?,
+            tracks,
+            progress_ms: now_playing.progress.as_millis() as u64,
+        })
+    }
+
+    /// Keeps what `playback` plays for the next session, or forgets the last
+    /// one when nothing plays.
+    pub fn save(playback: &Playback) {
+        let Some(path) = Self::path() else {
+            return;
+        };
+        let Some(saved) = Self::of(playback) else {
+            let _ = fs::remove_file(path);
+            return;
+        };
+        let written = serde_json::to_vec(&saved)
+            .map_err(io::Error::from)
+            .and_then(|json| super::utils::write_atomic(&path, &json));
+        if let Err(err) = written {
+            log::error!("couldn't save the playback queue: {err}");
         }
     }
 }

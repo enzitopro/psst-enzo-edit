@@ -58,6 +58,8 @@ pub struct Player {
     consecutive_loading_failures: usize,
     /// The item that failed to load once and is being retried.
     retried_item: Option<PlaybackItem>,
+    /// Where the next track to play starts, paused: the last session, restored.
+    start_paused_at: Option<Duration>,
 }
 
 impl Player {
@@ -83,6 +85,7 @@ impl Player {
             queue: Queue::new(),
             consecutive_loading_failures: 0,
             retried_item: None,
+            start_paused_at: None,
         }
     }
 
@@ -115,8 +118,30 @@ impl Player {
     }
 
     fn handle_command(&mut self, cmd: PlayerCommand) {
+        // Whatever the user asks for meanwhile wins over the restored pause.
+        let keeps_pause = matches!(
+            cmd,
+            PlayerCommand::Preload { .. }
+                | PlayerCommand::Download { .. }
+                | PlayerCommand::Configure { .. }
+                | PlayerCommand::SetQueueBehavior { .. }
+                | PlayerCommand::AddToQueue { .. }
+                | PlayerCommand::SetVolume { .. }
+                | PlayerCommand::Pause
+        );
+        if !keeps_pause {
+            self.start_paused_at = None;
+        }
         match cmd {
             PlayerCommand::LoadQueue { items, position } => self.load_queue(items, position),
+            PlayerCommand::LoadQueuePaused {
+                items,
+                position,
+                progress,
+            } => {
+                self.start_paused_at = Some(progress);
+                self.load_queue(items, position);
+            }
             PlayerCommand::LoadAndPlay { item } => self.load_and_play(item),
             PlayerCommand::Preload { item } => self.preload(item),
             PlayerCommand::Download { items } => self.download(items),
@@ -375,6 +400,10 @@ impl Player {
         self.sender
             .send(PlayerEvent::Playing { path, position })
             .unwrap();
+        if let Some(progress) = self.start_paused_at.take() {
+            self.pause();
+            self.seek(progress);
+        }
     }
 
     fn pause(&mut self) {
@@ -539,6 +568,13 @@ pub enum PlayerCommand {
     LoadQueue {
         items: Vec<PlaybackItem>,
         position: usize,
+    },
+    /// Like `LoadQueue`, but paused at `progress` once loaded: picking up where
+    /// the last session left off.
+    LoadQueuePaused {
+        items: Vec<PlaybackItem>,
+        position: usize,
+        progress: Duration,
     },
     LoadAndPlay {
         item: PlaybackItem,

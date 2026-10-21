@@ -48,7 +48,7 @@ pub use crate::data::{
     nav::{Nav, Route, SpotifyUrl},
     playback::{
         NowPlaying, Playable, PlayableMatcher, Playback, PlaybackOrigin, PlaybackPayload,
-        PlaybackState, QueueBehavior, QueueEntry,
+        PlaybackState, QueueBehavior, QueueEntry, SavedPlayback,
     },
     playlist::{
         Playlist, PlaylistAddTrack, PlaylistDetail, PlaylistLink, PlaylistRemoveTrack,
@@ -820,6 +820,40 @@ mod tests {
         assert!(!state.common_ctx.is_playing(&copy, &PlaybackOrigin::Library));
         let other = Playable::Track(track(2));
         assert!(!state.common_ctx.is_playing(&other, &playlist));
+    }
+
+    #[test]
+    fn saved_playback_round_trips_the_queue() {
+        let mut state = AppState::default_with_config(Config::default());
+        let origin = PlaybackOrigin::Library;
+        let mut local = (*track(2)).clone();
+        local.local_path = Some(r"C:\Music\b.mp3".into());
+        local.duration = Duration::from_millis(123_456);
+        let tracks = [track(1), Arc::new(local), track(3)];
+        state.playback.queue = tracks
+            .iter()
+            .map(|track| QueueEntry {
+                item: Playable::Track(track.clone()),
+                origin: origin.clone(),
+            })
+            .collect();
+        let playing = Playable::Track(tracks[1].clone());
+        state.start_playback(playing, origin.clone(), Duration::from_secs(42));
+
+        let saved = SavedPlayback::of(&state.playback).unwrap();
+        assert_eq!((saved.position, saved.progress_ms), (1, 42_000));
+        let json = serde_json::to_string(&saved).unwrap();
+        let loaded: SavedPlayback = serde_json::from_str(&json).unwrap();
+        assert_eq!(serde_json::to_string(&loaded).unwrap(), json);
+        assert_eq!(loaded.origin, origin);
+        let track = &loaded.tracks[1];
+        assert_eq!(track.id, tracks[1].id);
+        assert_eq!(track.duration, Duration::from_millis(123_456));
+        assert_eq!(track.local_path.as_deref(), Some(r"C:\Music\b.mp3"));
+
+        // Nothing playing, nothing to keep.
+        state.playback.now_playing = None;
+        assert!(SavedPlayback::of(&state.playback).is_none());
     }
 
     #[test]

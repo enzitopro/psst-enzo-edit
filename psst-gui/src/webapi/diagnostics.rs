@@ -1029,3 +1029,80 @@ fn diagnostics_genre_search() {
     }
     assert!(!results.artists.is_empty() && !results.tracks.is_empty());
 }
+
+/// The last session's queue loads paused where it was, and plays on Resume.
+#[test]
+#[ignore]
+fn diagnostics_player_restore_paused() {
+    use psst_core::{
+        audio::{normalize::NormalizationLevel, output::DefaultAudioOutput},
+        cache::Cache,
+        cdn::Cdn,
+        item_id::ItemId,
+        player::{item::PlaybackItem, PlaybackConfig, Player, PlayerCommand, PlayerEvent},
+    };
+
+    let files: Vec<PathBuf> = std::env::var("PSST_DIAG_QUEUE")
+        .expect("PSST_DIAG_QUEUE=<file>;<file>")
+        .split(';')
+        .map(PathBuf::from)
+        .collect();
+    let items: Vec<PlaybackItem> = files
+        .iter()
+        .map(|path| PlaybackItem {
+            item_id: ItemId::from_local(path.clone()),
+            norm_level: NormalizationLevel::Track,
+        })
+        .collect();
+    let output = DefaultAudioOutput::open().expect("audio output");
+    let session = SessionService::empty();
+    let mut player = Player::new(
+        session.clone(),
+        Cdn::new(session, None).unwrap(),
+        Cache::new(std::env::temp_dir().join("psst-diagnostics-cache")).unwrap(),
+        PlaybackConfig::default(),
+        &output,
+    );
+    let sender = player.sender();
+    let receiver = player.receiver();
+    let progress = Duration::from_secs(30);
+    sender
+        .send(PlayerEvent::Command(PlayerCommand::SetVolume { volume: 0.0 }))
+        .unwrap();
+    sender
+        .send(PlayerEvent::Command(PlayerCommand::LoadQueuePaused {
+            items: items.clone(),
+            position: 1,
+            progress,
+        }))
+        .unwrap();
+
+    let started = Instant::now();
+    let (mut playing, mut paused, mut resumed) = (None, false, false);
+    let (mut while_paused, mut after_resume) = (Duration::ZERO, Duration::ZERO);
+    while started.elapsed() < Duration::from_secs(6) {
+        if !resumed && started.elapsed() > Duration::from_secs(3) {
+            resumed = true;
+            sender
+                .send(PlayerEvent::Command(PlayerCommand::Resume))
+                .unwrap();
+        }
+        let Ok(event) = receiver.recv_timeout(Duration::from_millis(20)) else {
+            continue;
+        };
+        match &event {
+            PlayerEvent::Playing { path, .. } => playing = Some(path.item_id),
+            PlayerEvent::Pausing { .. } => paused = true,
+            PlayerEvent::Position { position, .. } if !resumed => while_paused = *position,
+            PlayerEvent::Position { position, .. } => after_resume = *position,
+            _ => {}
+        }
+        player.handle(event);
+    }
+    println!("playing {playing:?}, paused {paused}, at {while_paused:?}, then {after_resume:?}");
+    assert_eq!(playing, Some(items[1].item_id));
+    assert!(paused);
+    // Still at the restored spot while paused, moving once resumed.
+    assert!(while_paused >= progress && while_paused < progress + Duration::from_secs(1));
+    assert!(after_resume > progress + Duration::from_secs(1));
+}

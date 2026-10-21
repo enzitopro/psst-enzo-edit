@@ -8,7 +8,7 @@ use crossbeam_channel::Sender;
 use druid::{
     im::Vector,
     widget::{prelude::*, Controller},
-    Code, ExtEventSink, InternalLifeCycle, KbKey, WindowHandle,
+    Code, ExtEventSink, InternalLifeCycle, KbKey, Selector, WindowHandle,
 };
 use psst_core::{
     audio::{normalize::NormalizationLevel, output::DefaultAudioOutput},
@@ -31,13 +31,16 @@ use crate::{
     data::Nav,
     data::{
         AppState, Config, NowPlaying, Playable, Playback, PlaybackOrigin, PlaybackState,
-        QueueBehavior, QueueEntry, Track, TrackId,
+        QueueBehavior, QueueEntry, SavedPlayback, Track, TrackId,
     },
     discord::{DiscordPresence, Presence},
     error::Error,
     ui::lyrics,
     webapi::WebApi,
 };
+
+/// Loads the queue of the last session, paused where it was.
+const RESTORE_PLAYBACK: Selector = Selector::new("app.playback.restore");
 
 pub struct PlaybackController {
     sender: Option<Sender<PlayerEvent>>,
@@ -375,15 +378,21 @@ impl PlaybackController {
         }
     }
 
+    fn playback_items(items: &Vector<QueueEntry>) -> Vec<PlaybackItem> {
+        items
+            .iter()
+            .map(|queued| PlaybackItem {
+                item_id: queued.item.id(),
+                norm_level: match queued.origin {
+                    PlaybackOrigin::Album(_) => NormalizationLevel::Album,
+                    _ => NormalizationLevel::Track,
+                },
+            })
+            .collect()
+    }
+
     fn play(&mut self, items: &Vector<QueueEntry>, position: usize) {
-        let playback_items = items.iter().map(|queued| PlaybackItem {
-            item_id: queued.item.id(),
-            norm_level: match queued.origin {
-                PlaybackOrigin::Album(_) => NormalizationLevel::Album,
-                _ => NormalizationLevel::Track,
-            },
-        });
-        let playback_items_vec: Vec<PlaybackItem> = playback_items.collect();
+        let playback_items_vec = Self::playback_items(items);
 
         // Make sure position is within bounds
         let position = if position >= playback_items_vec.len() {
@@ -675,6 +684,24 @@ where
                 }
                 ctx.set_handled();
             }
+            Event::Command(cmd) if cmd.is(RESTORE_PLAYBACK) => {
+                if let Some(saved) = SavedPlayback::load() {
+                    data.playback.queue = saved
+                        .tracks
+                        .into_iter()
+                        .map(|track| QueueEntry {
+                            item: Playable::Track(track),
+                            origin: saved.origin.clone(),
+                        })
+                        .collect();
+                    self.send(PlayerEvent::Command(PlayerCommand::LoadQueuePaused {
+                        items: Self::playback_items(&data.playback.queue),
+                        position: saved.position,
+                        progress: Duration::from_millis(saved.progress_ms),
+                    }));
+                }
+                ctx.set_handled();
+            }
             Event::Command(cmd) if cmd.is(cmd::PLAY_TRACKS) => {
                 let payload = cmd.get_unchecked(cmd::PLAY_TRACKS);
                 data.playback.queue = payload
@@ -795,6 +822,7 @@ where
 
                 // Request focus so we can receive keyboard events.
                 ctx.submit_command(cmd::SET_FOCUS.to(ctx.widget_id()));
+                ctx.submit_command(RESTORE_PLAYBACK.to(ctx.widget_id()));
             }
             LifeCycle::Internal(InternalLifeCycle::RouteFocusChanged { new: None, .. }) => {
                 // Druid doesn't have any "ambient focus" concept, so we catch the situation
