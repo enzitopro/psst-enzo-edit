@@ -522,9 +522,10 @@ fn async_tracks_widget() -> impl Widget<AppState> {
                 let d = arg.0;
                 let data = arg.1;
                 // Errors are shown, not turned into an empty (blank) list.
-                WebApi::global().get_playlist_tracks(&d.id).map(|tracks| {
-                    sort_tracks(&tracks, data.config.sort_criteria, data.config.sort_order)
-                })
+                let (criteria, order) = data.config.track_sort(&d.id);
+                WebApi::global()
+                    .get_playlist_tracks(&d.id)
+                    .map(|tracks| sort_tracks(&tracks, criteria, order))
             },
             |_, data, d| data.playlist_detail.tracks.defer(d.0),
             |_, data, (d, r)| {

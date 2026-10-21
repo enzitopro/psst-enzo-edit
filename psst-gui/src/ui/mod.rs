@@ -520,7 +520,7 @@ fn topbar_sort_widget() -> impl Widget<AppState> {
 
     // "Sort: Title", a click opens the list of criteria.
     let criteria = Label::dynamic(|data: &AppState, _| {
-        let name = match data.config.sort_criteria {
+        let name = match data.current_sort().0 {
             SortCriteria::Title => "Title",
             SortCriteria::Artist => "Artist",
             SortCriteria::Album => "Album",
@@ -540,7 +540,7 @@ fn topbar_sort_widget() -> impl Widget<AppState> {
 
     // Arrow toggling between ascending and descending.
     let direction = Either::new(
-        |data: &AppState, _| data.config.sort_order == SortOrder::Ascending,
+        |data: &AppState, _| data.current_sort().1 == SortOrder::Ascending,
         up_icon,
         down_icon,
     )
@@ -611,7 +611,7 @@ fn sorting_menu(app_state: &AppState) -> Menu<AppState> {
     let mut sort_by_duration = MenuItem::new("Duration").command(cmd::SORT_BY_DURATION);
     let mut sort_by_artist = MenuItem::new("Artist").command(cmd::SORT_BY_ARTIST);
 
-    match app_state.config.sort_criteria {
+    match app_state.current_sort().0 {
         SortCriteria::Title => sort_by_title = sort_by_title.selected(true),
         SortCriteria::Album => sort_by_album = sort_by_album.selected(true),
         SortCriteria::DateAdded => sort_by_date_added = sort_by_date_added.selected(true),

@@ -41,7 +41,18 @@ pub enum Nav {
     ShowDetail(ShowLink),
 }
 
+pub const SAVED_TRACKS_LIST: &str = "saved-tracks";
+
 impl Nav {
+    /// The key of the sortable track list on this page, for its sort.
+    pub fn track_list(&self) -> Option<&str> {
+        match self {
+            Nav::SavedTracks => Some(SAVED_TRACKS_LIST),
+            Nav::PlaylistDetail(link) => Some(&link.id),
+            _ => None,
+        }
+    }
+
     pub fn route(&self) -> Route {
         match self {
             Nav::Home => Route::Home,

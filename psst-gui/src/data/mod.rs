@@ -38,7 +38,10 @@ pub use crate::data::{
     artist::{
         Artist, ArtistAlbums, ArtistDetail, ArtistInfo, ArtistLink, ArtistOverview, ArtistStats,
     },
-    config::{AudioQuality, Authentication, Config, Preferences, PreferencesTab, Theme},
+    config::{
+        AudioQuality, Authentication, Config, Preferences, PreferencesTab, SortCriteria,
+        SortOrder, Theme,
+    },
     ctx::Ctx,
     find::{FindQuery, Finder, MatchFindQuery},
     lyrics::{Lyrics, LyricsCandidate, LyricsSearch},
@@ -227,14 +230,22 @@ impl AppState {
         self.playlist_detail.playlist = Promise::Empty;
     }
 
-    /// Re-sorts the open playlist and the saved tracks in place, after the
-    /// sort settings change.  No need to load them again.
+    /// The sort of the track list on screen.
+    pub fn current_sort(&self) -> (SortCriteria, SortOrder) {
+        let list = self.nav.track_list();
+        list.map(|list| self.config.track_sort(list))
+            .unwrap_or_default()
+    }
+
+    /// Re-sorts the open playlist and the saved tracks in place, each by its
+    /// own sort, after one changes.  No need to load them again.
     pub fn resort_tracks(&mut self) {
-        let (criteria, order) = (self.config.sort_criteria, self.config.sort_order);
         if let Some(playlist) = self.playlist_detail.tracks.resolved_mut() {
+            let (criteria, order) = self.config.track_sort(&playlist.id);
             playlist.tracks = sort_tracks(&playlist.tracks, criteria, order);
         }
         if self.library.saved_tracks.is_resolved() {
+            let (criteria, order) = self.config.track_sort(nav::SAVED_TRACKS_LIST);
             self.with_library_mut(|library| {
                 if let Some(saved) = library.saved_tracks.resolved_mut() {
                     saved.tracks = sort_tracks(&saved.tracks, criteria, order);
@@ -753,6 +764,39 @@ mod tests {
         let mut track = local_track(&item, None, 1, 1);
         track.id = TrackId(ItemId::new(id, ItemIdType::Track));
         Arc::new(track)
+    }
+
+    #[test]
+    fn each_track_list_keeps_its_own_sort() {
+        let mut state = AppState::default_with_config(Config::default());
+        let saved = SavedTracks::new([track(1), track(2)].into_iter().collect());
+        state.with_library_mut(|library| library.saved_tracks.resolve_or_reject((), Ok(saved)));
+        let link = PlaylistLink {
+            id: "p".into(),
+            name: "P".into(),
+        };
+        let tracks = PlaylistTracks {
+            id: link.id.clone(),
+            name: link.name.clone(),
+            tracks: [track(1), track(2)].into_iter().collect(),
+        };
+        state.playlist_detail.tracks.resolve(link.clone(), tracks);
+        let by_title = (SortCriteria::Title, SortOrder::Descending);
+        state.config.track_sorts.insert("p".into(), by_title);
+        state.resort_tracks();
+
+        let titles = |tracks: &Vector<Arc<Track>>| -> Vec<String> {
+            tracks.iter().map(|t| t.name.to_string()).collect()
+        };
+        let playlist = state.playlist_detail.tracks.resolved().unwrap();
+        assert_eq!(titles(&playlist.tracks), ["2", "1"]);
+        let saved = state.library.saved_tracks.resolved().unwrap();
+        assert_eq!(titles(&saved.tracks), ["1", "2"]);
+
+        state.navigate(&Nav::PlaylistDetail(link));
+        assert_eq!(state.current_sort(), by_title);
+        state.navigate(&Nav::SavedTracks);
+        assert_eq!(state.current_sort(), Default::default());
     }
 
     #[test]

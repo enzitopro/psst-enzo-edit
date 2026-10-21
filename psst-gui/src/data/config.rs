@@ -5,7 +5,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use druid::{im::Vector, Data, Lens, Size};
+use druid::{
+    im::{HashMap, Vector},
+    Data, Lens, Size,
+};
 use platform_dirs::AppDirs;
 use psst_core::{
     cache::{mkdir_if_not_exists, CacheHandle},
@@ -134,8 +137,9 @@ pub struct Config {
     pub artists_grid: bool,
     pub window_size: Size,
     pub slider_scroll_scale: SliderScrollScale,
-    pub sort_order: SortOrder,
-    pub sort_criteria: SortCriteria,
+    /// The sort of each track list, keyed by `Nav::track_list`.  Lists never
+    /// sorted keep their own order.
+    pub track_sorts: HashMap<String, (SortCriteria, SortOrder)>,
     pub paginated_limit: usize,
     pub seek_duration: usize,
     pub lastfm_session_key: Option<String>,
@@ -169,8 +173,7 @@ impl Default for Config {
             artists_grid: false,
             window_size: Size::new(theme::grid(80.0), theme::grid(100.0)),
             slider_scroll_scale: Default::default(),
-            sort_order: Default::default(),
-            sort_criteria: Default::default(),
+            track_sorts: HashMap::new(),
             paginated_limit: 500,
             seek_duration: 10,
             lastfm_session_key: None,
@@ -244,6 +247,10 @@ impl Config {
             // An antivirus or an editor holding the file; the next save tries again.
             Err(err) => log::error!("couldn't save config {:?}: {err}", path),
         }
+    }
+
+    pub fn track_sort(&self, list: &str) -> (SortCriteria, SortOrder) {
+        self.track_sorts.get(list).copied().unwrap_or_default()
     }
 
     pub fn has_credentials(&self) -> bool {

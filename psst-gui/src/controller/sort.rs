@@ -19,31 +19,35 @@ where
         data: &mut AppState,
         env: &Env,
     ) {
-        let criteria = match event {
+        let (mut criteria, mut order) = data.current_sort();
+        match event {
             Event::Command(cmd) if cmd.is(cmd::TOGGLE_SORT_ORDER) => {
-                data.config.sort_order = match data.config.sort_order {
+                order = match order {
                     SortOrder::Ascending => SortOrder::Descending,
                     SortOrder::Descending => SortOrder::Ascending,
                 };
-                data.resort_tracks();
-                ctx.set_handled();
-                return;
             }
-            Event::Command(cmd) if cmd.is(cmd::SORT_BY_TITLE) => SortCriteria::Title,
-            Event::Command(cmd) if cmd.is(cmd::SORT_BY_ALBUM) => SortCriteria::Album,
-            Event::Command(cmd) if cmd.is(cmd::SORT_BY_DATE_ADDED) => SortCriteria::DateAdded,
-            Event::Command(cmd) if cmd.is(cmd::SORT_BY_ARTIST) => SortCriteria::Artist,
-            Event::Command(cmd) if cmd.is(cmd::SORT_BY_DURATION) => SortCriteria::Duration,
+            Event::Command(cmd) if cmd.is(cmd::SORT_BY_TITLE) => criteria = SortCriteria::Title,
+            Event::Command(cmd) if cmd.is(cmd::SORT_BY_ALBUM) => criteria = SortCriteria::Album,
+            Event::Command(cmd) if cmd.is(cmd::SORT_BY_DATE_ADDED) => {
+                criteria = SortCriteria::DateAdded
+            }
+            Event::Command(cmd) if cmd.is(cmd::SORT_BY_ARTIST) => criteria = SortCriteria::Artist,
+            Event::Command(cmd) if cmd.is(cmd::SORT_BY_DURATION) => {
+                criteria = SortCriteria::Duration
+            }
             _ => {
                 child.event(ctx, event, data, env);
                 return;
             }
-        };
-        if data.config.sort_criteria != criteria {
-            data.config.sort_criteria = criteria;
-            // Sorted in place, the tracks are already loaded.
-            data.resort_tracks();
         }
         ctx.set_handled();
+        if let Some(list) = data.nav.track_list().map(String::from) {
+            if (criteria, order) != data.current_sort() {
+                data.config.track_sorts.insert(list, (criteria, order));
+                // Sorted in place, the tracks are already loaded.
+                data.resort_tracks();
+            }
+        }
     }
 }
