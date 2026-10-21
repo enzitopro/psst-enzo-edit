@@ -922,3 +922,17 @@ fn diagnostics_lastfm_signature() {
     let err = result.unwrap_err().to_string();
     assert!(!err.contains("signature"), "{err}");
 }
+
+/// Loads the followed artists from the library.
+#[test]
+#[ignore]
+fn diagnostics_followed_artists() {
+    let mut config = Config::load().expect("Psst config not found, log in first");
+    init(&mut config);
+    let artists = WebApi::global().get_followed_artists().expect("followed artists");
+    println!("{} followed artists", artists.len());
+    for artist in artists.iter().take(5) {
+        println!("  {} ({}), {} images", artist.name, artist.id, artist.images.len());
+    }
+    assert!(artists.iter().all(|a| !a.id.is_empty() && !a.name.is_empty()));
+}

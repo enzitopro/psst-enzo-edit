@@ -28,25 +28,51 @@ pub const LOAD_DETAIL: Selector<ArtistLink> = Selector::new("app.artist.load-det
 pub fn detail_widget() -> impl Widget<AppState> {
     Flex::column()
         .with_child(async_artist_info().padding((theme::grid(1.0), 0.0)))
-        .with_child(saved_tracks_widget().padding((theme::grid(1.0), 0.0)))
         .with_child(async_albums_widget().padding((theme::grid(1.0), 0.0)))
         .with_child(async_related_widget().padding((theme::grid(1.0), 0.0)))
 }
 
-/// The artist's tracks in the library, and a button to download them all.
-/// Nothing when there are none.
-fn saved_tracks_widget() -> impl Widget<AppState> {
-    let header = Flex::row()
-        .with_child(header_widget("Your Saved Songs"))
+/// The artist's tracks in the library, like a playlist: play them, download
+/// them all, or go to the artist.
+pub fn saved_tracks_page() -> impl Widget<AppState> {
+    let artist = |data: &AppState| match &data.nav {
+        Nav::ArtistSavedTracks(artist) => Some(artist.clone()),
+        _ => None,
+    };
+    let info = Flex::row()
+        .with_child(
+            Label::dynamic(
+                |data: &AppState, _| match data.artist_detail.saved_tracks.len() {
+                    1 => "1 saved song".to_string(),
+                    count => format!("{count} saved songs"),
+                },
+            )
+            .with_text_size(theme::TEXT_SIZE_SMALL),
+        )
         .with_default_spacer()
         .with_child(
-            Button::new("Download for Offline").on_click(|ctx, data: &mut AppState, _| {
-                if let Nav::ArtistDetail(artist) = &data.nav {
-                    let tracks = data.artist_detail.saved_tracks.clone();
-                    ctx.submit_command(cmd::DOWNLOAD_TRACKS.with((artist.name.clone(), tracks)));
-                }
-            }),
+            Label::new("Go to Artist")
+                .with_text_size(theme::TEXT_SIZE_SMALL)
+                .link()
+                .on_left_click(move |ctx, _, data: &mut AppState, _| {
+                    if let Some(artist) = artist(data) {
+                        ctx.submit_command(cmd::NAVIGATE.with(Nav::ArtistDetail(artist)));
+                    }
+                }),
         );
+    let buttons = Flex::row()
+        .with_child(playable::play_buttons(|data| {
+            Some(&data.artist_detail.saved_tracks)
+        }))
+        .with_default_spacer()
+        .with_child(Button::new("Download for Offline").on_click(
+            move |ctx, data: &mut AppState, _| {
+                if let Some(artist) = artist(data) {
+                    let tracks = data.artist_detail.saved_tracks.clone();
+                    ctx.submit_command(cmd::DOWNLOAD_TRACKS.with((artist.name, tracks)));
+                }
+            },
+        ));
     let tracks = playable::list_widget(playable::Display {
         track: track::Display {
             title: true,
@@ -59,14 +85,13 @@ fn saved_tracks_widget() -> impl Widget<AppState> {
         AppState::common_ctx,
         AppState::artist_detail.then(ArtistDetail::saved_tracks),
     ));
-    Either::new(
-        |data: &AppState, _| data.artist_detail.saved_tracks.is_empty(),
-        Empty,
-        Flex::column()
-            .cross_axis_alignment(CrossAxisAlignment::Start)
-            .with_child(header)
-            .with_child(tracks),
-    )
+    Flex::column()
+        .cross_axis_alignment(CrossAxisAlignment::Start)
+        .with_child(info)
+        .with_spacer(theme::grid(1.0))
+        .with_child(buttons)
+        .with_spacer(theme::grid(1.0))
+        .with_child(tracks)
 }
 
 fn async_albums_widget() -> impl Widget<AppState> {
@@ -125,7 +150,8 @@ fn async_related_widget() -> impl Widget<AppState> {
         .lens(AppState::artist_detail.then(ArtistDetail::overview))
 }
 
-pub fn artist_widget(horizontal: bool) -> impl Widget<Artist> {
+/// `open` is where clicking it goes, e.g. `Nav::ArtistDetail`.
+pub fn artist_widget(horizontal: bool, open: fn(ArtistLink) -> Nav) -> impl Widget<Artist> {
     let (mut artist, artist_image) = if horizontal {
         (Flex::column(), cover_widget(theme::grid(16.0)))
     } else {
@@ -160,8 +186,8 @@ pub fn artist_widget(horizontal: bool) -> impl Widget<Artist> {
         .padding(theme::grid(1.0))
         .link()
         .rounded(theme::BUTTON_BORDER_RADIUS)
-        .on_left_click(|ctx, _, artist, _| {
-            ctx.submit_command(cmd::NAVIGATE.with(Nav::ArtistDetail(artist.link())));
+        .on_left_click(move |ctx, _, artist, _| {
+            ctx.submit_command(cmd::NAVIGATE.with(open(artist.link())));
         })
         .context_menu(|artist| artist_menu(&artist.link()))
 }
@@ -258,7 +284,7 @@ fn related_widget() -> impl Widget<Cached<ArtistOverview>> {
     Flex::column()
         .cross_axis_alignment(CrossAxisAlignment::Start)
         .with_child(header_widget("Related Artists"))
-        .with_child(List::new(|| artist_widget(false)))
+        .with_child(List::new(|| artist_widget(false, Nav::ArtistDetail)))
         .lens(Cached::data.then(ArtistOverview::related))
 }
 

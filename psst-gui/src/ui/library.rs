@@ -1,25 +1,26 @@
 use std::sync::Arc;
 
 use druid::{
-    widget::{CrossAxisAlignment, Flex, Label, LineBreaking, List},
-    Insets, LensExt, Selector, Widget, WidgetExt,
+    widget::{Flex, List},
+    LensExt, Selector, Widget, WidgetExt,
 };
 
 use crate::{
     cmd,
     data::{
-        Album, AlbumLink, AppState, ArtistLink, Ctx, Library, Nav, SavedAlbums, SavedTracks, Show,
-        ShowLink, Track, TrackId,
+        Album, AlbumLink, AppState, Ctx, Library, Nav, SavedAlbums, SavedTracks, Show, ShowLink,
+        Track, TrackId,
     },
     ui::home::{shows_that_you_might_like, your_shows},
     webapi::WebApi,
     widget::{Async, Empty, MyWidgetExt},
 };
 
-use super::{album, playable, theme, track, utils};
+use super::{album, artist, playable, track, utils};
 
 pub const LOAD_TRACKS: Selector = Selector::new("app.library.load-tracks");
 pub const LOAD_ALBUMS: Selector = Selector::new("app.library.load-albums");
+pub const LOAD_ARTISTS: Selector = Selector::new("app.library.load-artists");
 pub const LOAD_SHOWS: Selector = Selector::new("app.library.load-shows");
 
 pub const SAVE_TRACK: Selector<Arc<Track>> = Selector::new("app.library.save-track");
@@ -59,53 +60,30 @@ pub fn saved_tracks_widget() -> impl Widget<AppState> {
     )
 }
 
-/// The artists of the saved tracks, in the sidebar.  It also loads and changes
-/// the saved tracks: the sidebar is always there, the Saved Tracks page isn't, so
-/// liking a track from another page used to do nothing.
-pub fn saved_artists_widget() -> impl Widget<AppState> {
-    let artist_row = || {
-        Flex::row()
-            .with_flex_child(
-                Label::dynamic(|(artist, _): &(ArtistLink, usize), _| artist.name.to_string())
-                    .with_line_break_mode(LineBreaking::WordWrap)
-                    .with_text_size(theme::TEXT_SIZE_SMALL),
-                1.0,
-            )
-            .with_child(
-                Label::dynamic(|(_, count): &(ArtistLink, usize), _| count.to_string())
-                    .with_text_size(theme::TEXT_SIZE_SMALL)
-                    .with_text_color(theme::PLACEHOLDER_COLOR),
-            )
-            .expand_width()
-            .padding(Insets::uniform_xy(theme::grid(2.0), theme::grid(0.6)))
-            .link()
-            .on_left_click(|ctx, _, (artist, _), _| {
-                ctx.submit_command(cmd::NAVIGATE.with(Nav::ArtistDetail(artist.clone())));
-            })
-    };
-    let artists = move || {
-        Flex::column()
-            .cross_axis_alignment(CrossAxisAlignment::Start)
-            .with_child(
-                Label::new("Artists")
-                    .with_font(theme::UI_FONT_MEDIUM)
-                    .with_text_color(theme::PLACEHOLDER_COLOR)
-                    .with_text_size(theme::TEXT_SIZE_SMALL)
-                    .padding(Insets::new(
-                        theme::grid(2.0),
-                        theme::grid(2.0),
-                        0.0,
-                        theme::grid(1.0),
-                    )),
-            )
-            .with_child(List::new(artist_row).lens(SavedTracks::artists))
-    };
-    Async::new(|| Empty, artists, || Empty)
-        .lens(AppState::library.then(Library::saved_tracks.in_arc()))
+/// The artists the user follows; each opens their saved songs.
+pub fn followed_artists_widget() -> impl Widget<AppState> {
+    Async::new(
+        utils::spinner_widget,
+        || List::new(|| artist::artist_widget(false, Nav::ArtistSavedTracks)),
+        utils::error_widget,
+    )
+    .lens(AppState::library.then(Library::followed_artists.in_arc()))
+    .on_command_async(
+        LOAD_ARTISTS,
+        |_| WebApi::global().get_followed_artists(),
+        |_, data, _| data.with_library_mut(|library| library.followed_artists.defer_default()),
+        |_, data, r| data.with_library_mut(|library| library.followed_artists.update(r)),
+    )
+}
+
+/// Loads and changes the saved tracks.  Shows nothing, but is always there: the
+/// Saved Tracks page isn't, so liking a track from another page used to do nothing.
+pub fn saved_tracks_loader() -> impl Widget<AppState> {
+    Empty
         .on_command_async(
             LOAD_TRACKS,
             |_| WebApi::global().get_saved_tracks().map(SavedTracks::new),
-            |_, data, _| {
+            |_, data: &mut AppState, _| {
                 data.with_library_mut(|library| {
                     library.saved_tracks.defer_default();
                 });

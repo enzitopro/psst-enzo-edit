@@ -4,7 +4,7 @@ use druid::im::Vector;
 use druid::widget::{Either, Flex, Label, Scroll};
 use druid::{widget::List, LensExt, Selector, Widget, WidgetExt};
 
-use crate::data::{Artist, Ctx, HomeDetail, MixedView, Show, Shows, Track, WithCtx};
+use crate::data::{Artist, Ctx, HomeDetail, MixedView, Nav, Show, Shows, Track, WithCtx};
 use crate::ui::library::{LOAD_SHOWS, SAVE_SHOW, UNSAVE_SHOW};
 use crate::widget::Empty;
 use crate::{
@@ -301,7 +301,7 @@ fn artist_results_widget() -> impl Widget<WithCtx<MixedView>> {
     Either::new(
         |artists: &Vector<Artist>, _| artists.is_empty(),
         Empty,
-        Scroll::new(List::new(|| artist::artist_widget(true)).horizontal())
+        Scroll::new(List::new(|| artist::artist_widget(true, Nav::ArtistDetail)).horizontal())
             .horizontal()
             .align_left(),
     )
@@ -348,7 +348,10 @@ fn show_results_widget() -> impl Widget<WithCtx<MixedView>> {
 fn user_top_artists_widget() -> impl Widget<AppState> {
     Async::new(
         spinner_widget,
-        || Scroll::new(List::new(|| artist::artist_widget(true)).horizontal()).horizontal(),
+        || {
+            Scroll::new(List::new(|| artist::artist_widget(true, Nav::ArtistDetail)).horizontal())
+                .horizontal()
+        },
         error_widget,
     )
     .lens(AppState::home_detail.then(HomeDetail::user_top_artists))

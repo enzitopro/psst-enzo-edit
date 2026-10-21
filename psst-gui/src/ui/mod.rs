@@ -225,14 +225,9 @@ pub fn artwork_widget() -> impl Widget<AppState> {
 }
 
 fn root_widget() -> impl Widget<AppState> {
-    let playlists = Scroll::new(
-        Flex::column()
-            .cross_axis_alignment(CrossAxisAlignment::Start)
-            .with_child(playlist::list_widget())
-            .with_child(library::saved_artists_widget()),
-    )
-    .vertical()
-    .expand_height();
+    let playlists = Scroll::new(playlist::list_widget())
+        .vertical()
+        .expand_height();
 
     let playlists = Flex::column()
         .must_fill_main_axis(true)
@@ -256,6 +251,7 @@ fn root_widget() -> impl Widget<AppState> {
         .background(Border::Top.with_color(theme::GREY_500));
 
     let sidebar = Flex::column()
+        .with_child(library::saved_tracks_loader())
         .with_flex_child(playlists, 1.0)
         .with_child(download_status_widget())
         .with_child(controls)
@@ -384,6 +380,16 @@ fn route_widget() -> impl Widget<AppState> {
                     .vertical()
                     .boxed()
             }
+            Route::SavedArtists => {
+                Scroll::new(library::followed_artists_widget().padding(theme::grid(1.0)))
+                    .vertical()
+                    .boxed()
+            }
+            Route::ArtistSavedTracks => {
+                Scroll::new(artist::saved_tracks_page().padding(theme::grid(1.0)))
+                    .vertical()
+                    .boxed()
+            }
             Route::Shows => Scroll::new(library::saved_shows_widget().padding(theme::grid(1.0)))
                 .vertical()
                 .boxed(),
@@ -456,6 +462,11 @@ fn sidebar_menu_widget() -> impl Widget<AppState> {
             "Albums",
             Some(&icons::ALBUM),
             Nav::SavedAlbums,
+        ))
+        .with_child(sidebar_link_widget(
+            "Artists",
+            Some(&icons::ARTIST),
+            Nav::SavedArtists,
         ))
         .with_child(sidebar_link_widget(
             "Podcasts",
@@ -676,12 +687,15 @@ fn route_icon_widget() -> impl Widget<Nav> {
         |nav: &Nav, _, _| {
             let icon = |icon: &SvgIcon| icon.scale(theme::ICON_SIZE_MEDIUM);
             match &nav {
-                Nav::Home | Nav::Lyrics | Nav::SavedTracks | Nav::SavedAlbums | Nav::Shows => {
-                    Empty.boxed()
-                }
+                Nav::Home
+                | Nav::Lyrics
+                | Nav::SavedTracks
+                | Nav::SavedAlbums
+                | Nav::SavedArtists
+                | Nav::Shows => Empty.boxed(),
                 Nav::SearchResults(_) => icon(&icons::SEARCH).boxed(),
                 Nav::AlbumDetail(_, _) => icon(&icons::ALBUM).boxed(),
-                Nav::ArtistDetail(_) => icon(&icons::ARTIST).boxed(),
+                Nav::ArtistDetail(_) | Nav::ArtistSavedTracks(_) => icon(&icons::ARTIST).boxed(),
                 Nav::PlaylistDetail(_) => icon(&icons::PLAYLIST).boxed(),
                 Nav::ShowDetail(_) => icon(&icons::PODCAST).boxed(),
             }

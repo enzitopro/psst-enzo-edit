@@ -192,7 +192,7 @@ fn artist_results_widget(include_header: bool) -> impl Widget<WithCtx<SearchResu
         include_header,
         Ctx::data().then(SearchResults::artists),
         |artists| artists.is_empty(),
-        || List::new(|| artist::artist_widget(false)),
+        || List::new(|| artist::artist_widget(false, Nav::ArtistDetail)),
     )
 }
 

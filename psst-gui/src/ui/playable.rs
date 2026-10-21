@@ -5,23 +5,24 @@ use druid::{
     kurbo::Line,
     lens::Map,
     piet::StrokeStyle,
-    widget::{Controller, ControllerHost, List, ListIter, Painter, ViewSwitcher},
+    widget::{Controller, ControllerHost, Flex, List, ListIter, Painter, ViewSwitcher},
     Data, Env, Event, EventCtx, Lens, RenderContext, Selector, Widget, WidgetExt,
 };
 
 use crate::{
     cmd,
     data::{
-        CommonCtx, FindQuery, MatchFindQuery, Playable, PlaybackOrigin, PlaybackPayload,
-        PlaylistTracks, SavedTracks, SearchResults, ShowEpisodes, Track, WithCtx,
+        AppState, CommonCtx, FindQuery, MatchFindQuery, Playable, PlaybackOrigin, PlaybackPayload,
+        PlaylistTracks, QueueBehavior, SavedTracks, SearchResults, ShowEpisodes, Track, WithCtx,
     },
     ui::theme,
+    widget::{icons, MyWidgetExt},
 };
 
 use super::{
     episode,
     find::{Find, Findable},
-    track,
+    playback, track,
 };
 
 #[derive(Copy, Clone)]
@@ -283,6 +284,38 @@ pub fn payload(data: &impl PlayableIter, clicked: usize) -> Option<PlaybackPaylo
         origin: data.origin(),
         position: position.unwrap_or(0),
     })
+}
+
+/// Play, and the play mode toggle (shuffle, repeat...) it follows: from the top,
+/// or from a random track in shuffle mode.  `tracks` reads the page's list.
+pub fn play_buttons<T: PlayableIter + 'static>(
+    tracks: fn(&AppState) -> Option<&T>,
+) -> impl Widget<AppState> {
+    Flex::row()
+        .with_child(
+            icons::PLAY
+                .scale((theme::grid(3.0), theme::grid(3.0)))
+                .padding(theme::grid(1.0))
+                .link()
+                .circle()
+                .border(theme::GREY_500, 1.0)
+                .on_left_click(move |ctx, _, data: &mut AppState, _| {
+                    let Some(tracks) = tracks(data) else {
+                        return;
+                    };
+                    let start = match data.playback.queue_behavior {
+                        QueueBehavior::Random if tracks.count() > 0 => {
+                            rand::random_range(0..tracks.count())
+                        }
+                        _ => 0,
+                    };
+                    if let Some(payload) = payload(tracks, start) {
+                        ctx.submit_command(cmd::PLAY_TRACKS.with(payload));
+                    }
+                }),
+        )
+        .with_default_spacer()
+        .with_child(playback::queue_behavior_widget().lens(AppState::playback))
 }
 
 struct PlayController;

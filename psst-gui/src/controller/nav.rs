@@ -23,6 +23,12 @@ impl NavController {
                     ctx.submit_command(library::LOAD_ALBUMS);
                 }
             }
+            Nav::SavedArtists => {
+                if !data.library.followed_artists.is_resolved() {
+                    ctx.submit_command(library::LOAD_ARTISTS);
+                }
+            }
+            Nav::ArtistSavedTracks(_) => data.refresh_artist_saved_tracks(),
             Nav::Shows => {
                 if !data.library.saved_shows.is_resolved() {
                     ctx.submit_command(library::LOAD_SHOWS);
@@ -50,7 +56,6 @@ impl NavController {
                 if !data.artist_detail.artist.contains(link) {
                     ctx.submit_command(artist::LOAD_DETAIL.with(link.to_owned()));
                 }
-                data.refresh_artist_saved_tracks();
             }
             Nav::PlaylistDetail(link) => {
                 if !data.playlist_detail.playlist.contains(link) {

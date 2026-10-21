@@ -16,7 +16,7 @@ use time::Date;
 
 use super::local_library::{LocalItem, LocalLibrary};
 use crate::data::{
-    utils::sanitize_html_string, Album, AlbumLink, AlbumType, ArtistLink, Copyright,
+    utils::sanitize_html_string, Album, AlbumLink, AlbumType, Artist, ArtistLink, Copyright,
     CopyrightType, DatePrecision, Image, Playlist, PublicUser, Track, TrackId,
 };
 
@@ -204,10 +204,9 @@ impl LibraryResponse {
         self.data.me.library_v3.items.len()
     }
 
-    /// Playlists of this page, in library order.  Folders, liked songs and
-    /// anything that isn't a playlist are skipped (folders are flattened by
-    /// the request).
-    pub fn into_playlists(self) -> Result<Vec<Playlist>, String> {
+    /// The data of this page's items of type `typename` and whether each one is
+    /// pinned, in library order.
+    fn items_of(self, typename: &str) -> Result<Vec<(bool, Value)>, String> {
         let page = self.data.me.library_v3;
         if page.typename != "LibraryPage" {
             return Err(format!("unexpected library response: {}", page.typename));
@@ -215,13 +214,51 @@ impl LibraryResponse {
         Ok(page
             .items
             .into_iter()
-            .filter(|item| item.item.typename == "PlaylistResponseWrapper")
-            .filter_map(|item| {
-                let playlist: PathfinderPlaylist = serde_json::from_value(item.item.data?).ok()?;
-                playlist.to_playlist(item.pinned)
+            .filter(|item| item.item.typename == typename)
+            .filter_map(|item| Some((item.pinned, item.item.data?)))
+            .collect())
+    }
+
+    /// Playlists of this page, in library order.  Folders, liked songs and
+    /// anything that isn't a playlist are skipped (folders are flattened by
+    /// the request).
+    pub fn into_playlists(self) -> Result<Vec<Playlist>, String> {
+        Ok(self
+            .items_of("PlaylistResponseWrapper")?
+            .into_iter()
+            .filter_map(|(pinned, data)| {
+                let playlist: PathfinderPlaylist = serde_json::from_value(data).ok()?;
+                playlist.to_playlist(pinned)
             })
             .collect())
     }
+
+    /// Followed artists of this page, in library order.
+    pub fn into_artists(self) -> Result<Vec<Artist>, String> {
+        Ok(self
+            .items_of("ArtistResponseWrapper")?
+            .into_iter()
+            .filter_map(|(_, data)| {
+                let artist: PathfinderArtist = serde_json::from_value(data).ok()?;
+                Some(Artist {
+                    id: id_from_uri(&artist.uri),
+                    name: artist.profile.name.into(),
+                    images: artist
+                        .visuals
+                        .and_then(|visuals| visuals.avatar_image)
+                        .map(|image| image.images())
+                        .unwrap_or_default(),
+                })
+            })
+            .collect())
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ArtistVisuals {
+    #[serde(default)]
+    avatar_image: Option<Sources>,
 }
 
 #[derive(Deserialize)]
@@ -297,6 +334,9 @@ struct ArtistList {
 struct PathfinderArtist {
     uri: String,
     profile: ArtistProfile,
+    /// Only in the library, for the followed artists.
+    #[serde(default)]
+    visuals: Option<ArtistVisuals>,
 }
 
 #[derive(Deserialize)]

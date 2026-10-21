@@ -1767,39 +1767,55 @@ impl WebApi {
     }
 
     fn get_library_playlists(&self) -> Result<Vector<Playlist>, Error> {
+        // Include the playlists inside of folders.
+        let playlists = self.library_v3_items("Playlists", true, |page| page.into_playlists())?;
+        // Pinned playlists come first already, but don't rely on it.
+        let (pinned, rest): (Vector<_>, Vector<_>) = playlists.into_iter().partition(|p| p.pinned);
+        let mut playlists = pinned;
+        playlists.append(rest);
+        Ok(playlists)
+    }
+
+    /// The artists the user follows, in library order.
+    pub fn get_followed_artists(&self) -> Result<Vector<Artist>, Error> {
+        self.library_v3_items("Artists", false, |page| page.into_artists())
+    }
+
+    /// Every item of the library filtered with `filter`, page by page.
+    fn library_v3_items<T: Clone>(
+        &self,
+        filter: &str,
+        flatten: bool,
+        items: fn(pathfinder::LibraryResponse) -> Result<Vec<T>, String>,
+    ) -> Result<Vector<T>, Error> {
         const PAGE_SIZE: usize = 50;
 
-        let mut playlists = Vector::new();
+        let mut all = Vector::new();
         let mut offset = 0;
         loop {
             let response: pathfinder::LibraryResponse = self.pathfinder_query(
                 pathfinder::LIBRARY_V3,
                 json!({
-                    "filters": ["Playlists"],
+                    "filters": [filter],
                     "order": null,
                     "textFilter": null,
                     "features": [],
                     "limit": PAGE_SIZE,
                     "offset": offset,
-                    // Include the playlists inside of folders.
-                    "flatten": true,
+                    "flatten": flatten,
                     "folderUri": null,
                     "includeFoldersWhenFlattening": false,
                 }),
             )?;
             let total = response.total_count();
             let page_len = response.item_count();
-            playlists.extend(response.into_playlists().map_err(Error::WebApiError)?);
+            all.extend(items(response).map_err(Error::WebApiError)?);
             offset += page_len;
             if page_len == 0 || offset >= total || offset >= self.paginated_limit {
                 break;
             }
         }
-        // Pinned playlists come first already, but don't rely on it.
-        let (pinned, rest): (Vector<_>, Vector<_>) = playlists.into_iter().partition(|p| p.pinned);
-        let mut playlists = pinned;
-        playlists.append(rest);
-        Ok(playlists)
+        Ok(all)
     }
 
     fn get_pathfinder_playlist_page(
