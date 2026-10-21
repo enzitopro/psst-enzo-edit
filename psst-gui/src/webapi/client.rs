@@ -112,6 +112,11 @@ impl WebApi {
         *self.webapi_token.lock() = token;
     }
 
+    /// The current Web API token, refreshed in memory as it expires.
+    pub fn webapi_token(&self) -> Option<WebApiToken> {
+        self.webapi_token.lock().clone()
+    }
+
     /// Install the authenticated core session, used to mint the first-party
     /// tokens that `api-partner.spotify.com` requires.
     pub fn set_session(&self, session: SessionService) {
@@ -153,10 +158,9 @@ impl WebApi {
                 match oauth::refresh_webapi_token(client_id, refresh_token) {
                     Ok(new_token) => {
                         let access_token = new_token.access_token.clone();
-                        // NOTE: only updates the in-memory cache. The durable
-                        // copy in config.json is refreshed by Config on the
-                        // next save; if Spotify rotates the refresh token and
-                        // the process exits before then, the user must re-login.
+                        // Only in memory: the main window copies it into
+                        // config.json when it closes (`webapi_token()`), since
+                        // Spotify may rotate the refresh token.
                         *token_guard = Some(new_token);
                         return Ok(access_token);
                     }
@@ -345,29 +349,41 @@ impl WebApi {
         }
     }
 
-    /// Send a request using `self.load()`, but only if it isn't already present
-    /// in cache.
+    /// Send a request, unless a recent copy of the response is in the cache.
+    /// Older copies are refreshed (new releases, new episodes) but still used when
+    /// that fails, e.g. offline.  Unreadable copies count as missing.
     fn load_cached<T: Data + DeserializeOwned>(
         &self,
         request: &RequestBuilder,
         bucket: &str,
         key: &str,
     ) -> Result<Cached<T>, Error> {
-        if let Some(file) = self.cache.get(bucket, key) {
-            let cached_at = file.metadata()?.modified()?;
-            let value = serde_json::from_reader(file)?;
-            Ok(Cached::new(value, cached_at))
-        } else {
-            let response = Self::with_retry(|| self.request(request))?;
-            let body = {
-                let mut reader = response.into_body().into_reader();
-                let mut body = Vec::new();
-                reader.read_to_end(&mut body)?;
-                body
-            };
-            let value = serde_json::from_slice(&body)?;
-            self.cache.set(bucket, key, &body);
-            Ok(Cached::fresh(value))
+        const MAX_AGE: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+
+        let cached = self.cache.get(bucket, key).and_then(|file| {
+            let cached_at = file.metadata().ok()?.modified().ok()?;
+            let value = serde_json::from_reader(io::BufReader::new(file)).ok()?;
+            Some(Cached::new(value, cached_at))
+        });
+        let is_recent = |cached: &Cached<T>| {
+            cached
+                .cached_at
+                .and_then(|at| at.elapsed().ok())
+                .is_some_and(|age| age < MAX_AGE)
+        };
+        match cached {
+            Some(cached) if is_recent(&cached) => Ok(cached),
+            stale => {
+                let fetched: Result<Cached<T>, Error> = (|| {
+                    let response = Self::with_retry(|| self.request(request))?;
+                    let mut body = Vec::new();
+                    response.into_body().into_reader().read_to_end(&mut body)?;
+                    let value = serde_json::from_slice(&body)?;
+                    self.cache.set(bucket, key, &body);
+                    Ok(Cached::fresh(value))
+                })();
+                fetched.or_else(|err| stale.ok_or(err))
+            }
         }
     }
 
@@ -2300,5 +2316,36 @@ impl RequestBuilder {
             );
         }
         url
+    }
+}
+
+#[cfg(test)]
+mod load_cached_tests {
+    use super::*;
+    use std::{fs, time::SystemTime};
+
+    #[test]
+    fn refreshes_old_copies_but_falls_back_to_them() {
+        let dir = std::env::temp_dir().join(format!("psst-cache-test-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        // No Web API token, so every request fails right away, without network.
+        let api = WebApi::new(None, Some(dir.clone()), 50);
+        let request = &RequestBuilder::new("v1/artists/x", Method::Get, None);
+        let load = || api.load_cached::<String>(request, "test", "key");
+        let path = dir.join("test").join("key");
+
+        api.cache.set("test", "key", br#""recent""#);
+        assert_eq!(load().unwrap().data, "recent");
+
+        // Too old to trust, but better than nothing when the refresh fails.
+        let old = SystemTime::now() - Duration::from_secs(30 * 24 * 60 * 60);
+        fs::File::options().write(true).open(&path).unwrap().set_modified(old).unwrap();
+        assert_eq!(load().unwrap().data, "recent");
+
+        // A copy cut short is ignored instead of failing forever.
+        fs::write(&path, br#""rec"#).unwrap();
+        assert!(load().is_err());
+
+        fs::remove_dir_all(&dir).unwrap();
     }
 }

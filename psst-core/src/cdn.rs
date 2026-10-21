@@ -112,7 +112,9 @@ impl Cdn {
                 .header("Range", &range_header(offset, length))
                 .call()
         })?;
-        let total_length = parse_total_content_length(&response);
+        let content_range = response.headers().get("Content-Range");
+        let total_length =
+            parse_total_content_length(content_range.and_then(|value| value.to_str().ok()))?;
         let data_reader = response.into_body().into_reader();
         Ok((total_length, data_reader))
     }
@@ -188,19 +190,13 @@ fn range_header(offfset: u64, length: u64) -> String {
 /// Parses a total content length from a Content-Range response header.
 ///
 /// For example, returns 146515 for a response with header
-/// "Content-Range: bytes 0-1023/146515".
-fn parse_total_content_length(response: &ureq::http::response::Response<ureq::Body>) -> u64 {
-    response
-        .headers()
-        .get("Content-Range")
-        .expect("Content-Range header not found")
-        .to_str()
-        .expect("Failed to parse Content-Range Header")
-        .split('/')
-        .next_back()
-        .expect("Failed to parse Content-Range Header")
-        .parse()
-        .expect("Failed to parse Content-Range Header")
+/// "Content-Range: bytes 0-1023/146515".  An error, not a panic, when a proxy or
+/// captive portal answers without it: a panic left playback loading forever.
+fn parse_total_content_length(content_range: Option<&str>) -> Result<u64, Error> {
+    content_range
+        .and_then(|range| range.rsplit('/').next())
+        .and_then(|total| total.parse().ok())
+        .ok_or(Error::UnexpectedResponse)
 }
 
 /// Parses an expiration of an audio file URL.
@@ -228,6 +224,16 @@ mod tests {
 
     fn io_error(kind: io::ErrorKind) -> ureq::Error {
         ureq::Error::Io(io::Error::from(kind))
+    }
+
+    #[test]
+    fn parses_total_length_or_fails() {
+        assert_eq!(
+            parse_total_content_length(Some("bytes 0-1023/146515")).unwrap(),
+            146515
+        );
+        assert!(parse_total_content_length(None).is_err());
+        assert!(parse_total_content_length(Some("bytes */*")).is_err());
     }
 
     #[test]

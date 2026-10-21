@@ -80,9 +80,13 @@ impl AudioDecoder {
             MediaSourceStreamOptions::default(),
         );
         let format = codec.format_reader(mss)?;
-        let track = format.default_track().unwrap();
+        let track = format
+            .default_track()
+            .ok_or(SymphoniaError::Unsupported("file contains no audio track"))?;
         let decoder = codec.decoder(&track.codec_params)?;
-        let spec = known_signal_spec(decoder.codec_params(), &track.codec_params).unwrap();
+        let spec = known_signal_spec(decoder.codec_params(), &track.codec_params).ok_or(
+            SymphoniaError::Unsupported("unknown sample rate or channel count"),
+        )?;
 
         Ok(Self {
             track_id: track.id,

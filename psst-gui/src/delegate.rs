@@ -255,6 +255,11 @@ impl AppDelegate<AppState> for Delegate {
         }
         if self.main_window == Some(id) {
             data.config.volume = data.playback.volume;
+            // Keep the token refreshed while running, the old refresh token may
+            // no longer work.
+            if let Some(token) = WebApi::global().webapi_token() {
+                data.config.store_webapi_token(token);
+            }
             data.config.save();
             ctx.submit_command(commands::CLOSE_ALL_WINDOWS);
             ctx.submit_command(commands::QUIT_APP);
