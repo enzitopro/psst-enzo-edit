@@ -436,7 +436,7 @@ fn add_to_queue_command(track: &Arc<Track>, origin: &PlaybackOrigin) -> Command 
 }
 
 /// Local files have no Spotify ID, so everything that goes through the Web API
-/// (library, credits, recommendations, links, playlists) is left out.
+/// (library, credits, links, playlists) is left out.
 fn local_track_menu(track: &Arc<Track>, origin: &PlaybackOrigin) -> Menu<AppState> {
     let mut menu = Menu::empty();
 

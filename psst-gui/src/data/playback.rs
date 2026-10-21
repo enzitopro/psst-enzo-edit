@@ -5,9 +5,7 @@ use druid_enums::Matcher;
 use psst_core::item_id::ItemId;
 use serde::{Deserialize, Serialize};
 
-use super::{
-    AlbumLink, Episode, Library, Nav, PlaylistLink, RecommendationsRequest, ShowLink, Track,
-};
+use super::{AlbumLink, Episode, Library, Nav, PlaylistLink, ShowLink, Track};
 
 #[derive(Clone, Data, Lens)]
 pub struct Playback {
@@ -155,7 +153,6 @@ pub enum PlaybackOrigin {
     Playlist(PlaylistLink),
     Show(ShowLink),
     Search(Arc<str>),
-    Recommendations(Arc<RecommendationsRequest>),
 }
 
 impl PlaybackOrigin {
@@ -167,7 +164,6 @@ impl PlaybackOrigin {
             PlaybackOrigin::Playlist(link) => Nav::PlaylistDetail(link.clone()),
             PlaybackOrigin::Show(link) => Nav::ShowDetail(link.clone()),
             PlaybackOrigin::Search(query) => Nav::SearchResults(query.clone()),
-            PlaybackOrigin::Recommendations(request) => Nav::Recommendations(request.clone()),
         }
     }
 }
@@ -181,7 +177,6 @@ impl fmt::Display for PlaybackOrigin {
             PlaybackOrigin::Playlist(link) => link.name.fmt(f),
             PlaybackOrigin::Show(link) => link.name.fmt(f),
             PlaybackOrigin::Search(query) => query.fmt(f),
-            PlaybackOrigin::Recommendations(_) => f.write_str("Recommended"),
         }
     }
 }

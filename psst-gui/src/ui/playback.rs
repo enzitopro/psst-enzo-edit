@@ -180,7 +180,6 @@ fn playback_origin_icon(origin: &PlaybackOrigin) -> &'static SvgIcon {
         PlaybackOrigin::Playlist { .. } => &icons::PLAYLIST,
         PlaybackOrigin::Show { .. } => &icons::PODCAST,
         PlaybackOrigin::Search { .. } => &icons::SEARCH,
-        PlaybackOrigin::Recommendations { .. } => &icons::SEARCH,
     }
 }
 

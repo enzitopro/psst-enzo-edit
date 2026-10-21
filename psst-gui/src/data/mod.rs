@@ -9,7 +9,6 @@ mod nav;
 mod playback;
 mod playlist;
 mod promise;
-mod recommend;
 mod search;
 mod show;
 mod slider_scroll_scale;
@@ -53,16 +52,12 @@ pub use crate::data::{
         PlaylistTracks,
     },
     promise::{Promise, PromiseState},
-    recommend::{
-        Range, Recommend, Recommendations, RecommendationsKnobs, RecommendationsParams,
-        RecommendationsRequest, Toggled,
-    },
     search::{Search, SearchResults, SearchTopic},
     show::{Episode, EpisodeId, EpisodeLink, Show, ShowDetail, ShowEpisodes, ShowLink},
     slider_scroll_scale::SliderScrollScale,
     track::{sort_tracks, AudioAnalysis, Track, TrackId, TrackLines},
     user::{PublicUser, UserProfile},
-    utils::{Cached, Float64, Image, Page},
+    utils::{Cached, Image, Page},
 };
 use crate::ui::credits::TrackCredits;
 
@@ -78,7 +73,6 @@ pub struct AppState {
     pub preferences: Preferences,
     pub playback: Playback,
     pub search: Search,
-    pub recommend: Recommend,
     pub album_detail: AlbumDetail,
     pub artist_detail: ArtistDetail,
     pub playlist_detail: PlaylistDetail,
@@ -143,10 +137,6 @@ impl AppState {
             search: Search {
                 input: "".into(),
                 topic: None,
-                results: Promise::Empty,
-            },
-            recommend: Recommend {
-                knobs: Default::default(),
                 results: Promise::Empty,
             },
             home_detail: HomeDetail {

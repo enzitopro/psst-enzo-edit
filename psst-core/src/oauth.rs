@@ -5,11 +5,12 @@ use oauth2::{
 };
 use serde::{Deserialize, Serialize};
 use std::{
-    io::{BufRead, BufReader, Write},
+    io::{self, BufRead, BufReader, Write},
     net::TcpStream,
     net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener},
-    sync::mpsc,
-    time::Duration,
+    sync::mpsc::RecvTimeoutError,
+    thread,
+    time::{Duration, Instant},
 };
 use url::Url;
 
@@ -23,91 +24,66 @@ pub fn listen_for_callback_parameter(
     log::info!(
         "starting callback listener for '{parameter_name}' on {socket_address:?}",
     );
-
-    // Create a simpler, linear flow
-    // 1. Bind the listener
-    let listener = match TcpListener::bind(socket_address) {
-        Ok(l) => {
-            log::info!("listener bound successfully");
-            l
-        }
-        Err(e) => {
-            log::error!("Failed to bind listener: {e}");
-            return Err(Error::IoError(e));
-        }
-    };
-
-    // 2. Set up the channel for communication
-    let (tx, rx) = mpsc::channel::<Result<String, Error>>();
-
-    // 3. Spawn the thread. Loop so background requests (e.g. favicon.ico)
-    //    don't consume the single accept and break the OAuth flow.
-    let handle = std::thread::spawn(move || {
-        for stream in listener.incoming() {
-            match stream {
-                Ok(mut stream) => {
-                    if handle_callback_connection(&mut stream, &tx, parameter_name) {
-                        break;
-                    }
-                }
-                Err(e) => {
-                    log::error!("Failed to accept callback connection: {e}");
-                    let _ = tx.send(Err(Error::IoError(e)));
-                    break;
+    let listener = TcpListener::bind(socket_address).map_err(|e| {
+        log::error!("Failed to bind listener: {e}");
+        Error::IoError(e)
+    })?;
+    // Poll instead of blocking in `accept`: a blocked accept outlived the timeout
+    // and kept the port, so the next login attempt couldn't bind it.
+    listener.set_nonblocking(true)?;
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        match listener.accept() {
+            // Loop, so background requests (e.g. favicon.ico) don't end the flow.
+            Ok((mut stream, _)) => {
+                stream.set_nonblocking(false)?;
+                stream.set_read_timeout(Some(Duration::from_secs(5)))?;
+                if let Some(value) = handle_callback_connection(&mut stream, parameter_name) {
+                    return Ok(value);
                 }
             }
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                thread::sleep(Duration::from_millis(100));
+            }
+            Err(e) => {
+                log::error!("Failed to accept callback connection: {e}");
+                return Err(Error::IoError(e));
+            }
         }
-    });
-
-    // 4. Wait for the result with timeout
-    let result = match rx.recv_timeout(timeout) {
-        Ok(r) => r,
-        Err(e) => {
-            log::error!("Timed out or channel error: {e}");
-            return Err(Error::from(e));
-        }
-    };
-
-    // 5. Wait for thread completion
-    if handle.join().is_err() {
-        log::warn!("thread join failed, but continuing with result");
     }
-
-    // 6. Return the result
-    result
+    log::error!("timed out waiting for the '{parameter_name}' callback");
+    Err(Error::RecvTimeoutError(RecvTimeoutError::Timeout))
 }
 
-/// Handle one incoming TCP connection. Returns `true` if the OAuth
-/// parameter was extracted (caller should stop listening), or `false` to
-/// keep listening for the next request (e.g. favicon, malformed request).
+/// Handle one incoming TCP connection. Returns the OAuth parameter if the
+/// request carried it, or `None` to keep listening for the next request (e.g.
+/// favicon, malformed request).
 fn handle_callback_connection(
     stream: &mut TcpStream,
-    tx: &mpsc::Sender<Result<String, Error>>,
     parameter_name: &'static str,
-) -> bool {
+) -> Option<String> {
     let mut reader = BufReader::new(&mut *stream);
     let mut request_line = String::new();
 
     if reader.read_line(&mut request_line).is_err() {
-        return false;
+        return None;
     }
 
     if request_line.contains("favicon.ico") {
         send_not_found_response(stream);
-        return false;
+        return None;
     }
 
     match extract_parameter_from_request(&request_line, parameter_name) {
         Some(value) => {
             log::info!("received callback parameter '{parameter_name}'.");
             send_success_response(stream);
-            let _ = tx.send(Ok(value));
-            true
+            Some(value)
         }
         None => {
             log::warn!("ignoring request without '{parameter_name}': {request_line}");
             send_not_found_response(stream);
-            false
+            None
         }
     }
 }
@@ -333,4 +309,36 @@ pub fn refresh_webapi_token(
         refresh_token: Some(new_refresh_token),
         expires_at: now + expires_in,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn free_port_address() -> SocketAddr {
+        TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap()
+    }
+
+    #[test]
+    fn skips_other_requests_and_returns_the_parameter() {
+        let address = free_port_address();
+        let browser = thread::spawn(move || {
+            for request in ["GET /favicon.ico HTTP/1.1", "GET /callback?code=abc HTTP/1.1"] {
+                thread::sleep(Duration::from_millis(200));
+                let mut stream = TcpStream::connect(address).unwrap();
+                write!(stream, "{request}\r\n\r\n").unwrap();
+            }
+        });
+        let code = listen_for_callback_parameter(address, Duration::from_secs(5), "code");
+        assert_eq!(code.unwrap(), "abc");
+        browser.join().unwrap();
+    }
+
+    #[test]
+    fn timeout_frees_the_port_for_the_next_attempt() {
+        let address = free_port_address();
+        let result = listen_for_callback_parameter(address, Duration::from_millis(200), "code");
+        assert!(result.is_err());
+        assert!(TcpListener::bind(address).is_ok());
+    }
 }

@@ -1,7 +1,7 @@
 use crate::{
     cmd,
     data::{AppState, Nav, SpotifyUrl},
-    ui::{album, artist, library, lyrics, playlist, recommend, search, show},
+    ui::{album, artist, library, lyrics, playlist, search, show},
 };
 use druid::widget::{prelude::*, Controller};
 use druid::Code;
@@ -61,11 +61,6 @@ impl NavController {
             Nav::ShowDetail(link) => {
                 if !data.show_detail.show.contains(link) {
                     ctx.submit_command(show::LOAD_DETAIL.with(link.to_owned()));
-                }
-            }
-            Nav::Recommendations(request) => {
-                if !data.recommend.results.contains(request) {
-                    ctx.submit_command(recommend::LOAD_RESULTS.with(request.clone()));
                 }
             }
         }

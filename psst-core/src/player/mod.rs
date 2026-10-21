@@ -319,67 +319,23 @@ impl Player {
         })
     }
 
-    /// Downloads `items` into the cache one by one in a background thread, retrying
-    /// failures (usually dropped connections), and reports back with
-    /// `PlayerEvent::Downloaded`.
+    /// Downloads `items` into the cache one by one in a background thread, see
+    /// `download_items`.
     fn download(&self, items: Vec<PlaybackItem>) {
-        const ATTEMPTS: usize = 3;
-        const RETRY_AFTER: Duration = Duration::from_secs(5);
-        // After a few dozen tracks Spotify refuses audio keys for minutes, so wait
-        // it out.  The waits restart after each success; once they run out, the
-        // rest of the items fail right away.
-        const KEY_WAITS_SECS: [u64; 6] = [60, 120, 240, 300, 300, 300];
-
         let sender = self.sender.clone();
         let session = self.session.clone();
         let cdn = self.cdn.clone();
         let cache = self.cache.clone();
         let config = self.config.clone();
         thread::spawn(move || {
-            let mut failed = 0;
-            let mut key_waits = KEY_WAITS_SECS.iter();
-            for item in &items {
-                let mut attempt = 1;
-                let ok = loop {
-                    match item.download(&session, &cdn, &cache, &config) {
-                        Ok(()) => {
-                            key_waits = KEY_WAITS_SECS.iter();
-                            break true;
-                        }
-                        Err(Error::AudioKeyRefused) => {
-                            let Some(&secs) = key_waits.next() else {
-                                failed += 1;
-                                break false;
-                            };
-                            log::warn!("audio key refused, resuming downloads in {secs}s");
-                            let _ = sender.send(PlayerEvent::DownloadPaused {
-                                resume_in: Duration::from_secs(secs),
-                            });
-                            thread::sleep(Duration::from_secs(secs));
-                        }
-                        Err(err)
-                            if attempt == ATTEMPTS || matches!(err, Error::MediaFileNotFound) =>
-                        {
-                            log::error!("failed to download {:?}: {err}", item.item_id);
-                            failed += 1;
-                            break false;
-                        }
-                        Err(err) => {
-                            log::warn!("download failed, retrying: {err}");
-                            attempt += 1;
-                            thread::sleep(RETRY_AFTER);
-                        }
-                    }
-                };
-                let _ = sender.send(PlayerEvent::ItemDownloaded {
-                    item_id: item.item_id,
-                    ok,
-                });
-            }
-            let _ = sender.send(PlayerEvent::Downloaded {
-                downloaded: items.len() - failed,
-                failed,
-            });
+            download_items(
+                &items,
+                |item| item.download(&session, &cdn, &cache, &config),
+                thread::sleep,
+                |event| {
+                    let _ = sender.send(event);
+                },
+            );
         });
     }
 
@@ -519,6 +475,66 @@ impl Player {
     }
 }
 
+/// Downloads `items` one by one with `download`, retrying failures (usually
+/// dropped connections) and waiting out audio key refusals with `sleep`.  Reports
+/// each item and each wait with `send`, and then `PlayerEvent::Downloaded`.
+fn download_items(
+    items: &[PlaybackItem],
+    mut download: impl FnMut(&PlaybackItem) -> Result<(), Error>,
+    mut sleep: impl FnMut(Duration),
+    mut send: impl FnMut(PlayerEvent),
+) {
+    const ATTEMPTS: usize = 3;
+    const RETRY_AFTER: Duration = Duration::from_secs(5);
+    // After a few dozen tracks Spotify refuses audio keys for minutes, so wait
+    // it out.  The waits restart after each success; once they run out, the
+    // rest of the items fail right away.
+    const KEY_WAITS_SECS: [u64; 6] = [60, 120, 240, 300, 300, 300];
+
+    let mut failed = 0;
+    let mut key_waits = KEY_WAITS_SECS.iter();
+    for item in items {
+        let mut attempt = 1;
+        let ok = loop {
+            match download(item) {
+                Ok(()) => {
+                    key_waits = KEY_WAITS_SECS.iter();
+                    break true;
+                }
+                Err(Error::AudioKeyRefused) => {
+                    let Some(&secs) = key_waits.next() else {
+                        failed += 1;
+                        break false;
+                    };
+                    log::warn!("audio key refused, resuming downloads in {secs}s");
+                    send(PlayerEvent::DownloadPaused {
+                        resume_in: Duration::from_secs(secs),
+                    });
+                    sleep(Duration::from_secs(secs));
+                }
+                Err(err) if attempt == ATTEMPTS || matches!(err, Error::MediaFileNotFound) => {
+                    log::error!("failed to download {:?}: {err}", item.item_id);
+                    failed += 1;
+                    break false;
+                }
+                Err(err) => {
+                    log::warn!("download failed, retrying: {err}");
+                    attempt += 1;
+                    sleep(RETRY_AFTER);
+                }
+            }
+        };
+        send(PlayerEvent::ItemDownloaded {
+            item_id: item.item_id,
+            ok,
+        });
+    }
+    send(PlayerEvent::Downloaded {
+        downloaded: items.len() - failed,
+        failed,
+    });
+}
+
 pub enum PlayerCommand {
     LoadQueue {
         items: Vec<PlaybackItem>,
@@ -656,4 +672,67 @@ enum PreloadState {
         loaded_item: Box<LoadedPlaybackItem>,
     },
     None,
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::VecDeque;
+
+    use super::*;
+    use crate::{audio::normalize::NormalizationLevel, item_id::ItemIdType};
+
+    #[test]
+    fn download_retries_and_waits_out_key_refusals() {
+        let items: Vec<_> = (1..=5)
+            .map(|id| PlaybackItem {
+                item_id: ItemId::new(id, ItemIdType::Track),
+                norm_level: NormalizationLevel::None,
+            })
+            .collect();
+        let refused = || Err(Error::AudioKeyRefused);
+        let mut results: VecDeque<Result<(), Error>> = [
+            // 1: one refusal, then fine.
+            refused(),
+            Ok(()),
+            // 2: two dropped connections, then fine.
+            Err(Error::SessionDisconnected),
+            Err(Error::SessionDisconnected),
+            Ok(()),
+        ]
+        .into_iter()
+        // 3: refused through every wait (they restarted after 2), so it fails.
+        .chain((0..7).map(|_| refused()))
+        // 4: still refused, no waits left.
+        .chain([refused()])
+        // 5: gone from Spotify, no point retrying.
+        .chain([Err(Error::MediaFileNotFound)])
+        .collect();
+
+        let mut sleeps = Vec::new();
+        let mut events = Vec::new();
+        download_items(
+            &items,
+            |_| results.pop_front().unwrap(),
+            |wait| sleeps.push(wait.as_secs()),
+            |event| events.push(event),
+        );
+
+        assert!(results.is_empty());
+        assert_eq!(sleeps, [60, 5, 5, 60, 120, 240, 300, 300, 300]);
+        let oks: Vec<_> = events
+            .iter()
+            .filter_map(|event| match event {
+                PlayerEvent::ItemDownloaded { ok, .. } => Some(*ok),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(oks, [true, true, false, false, false]);
+        assert!(matches!(
+            events.last(),
+            Some(PlayerEvent::Downloaded {
+                downloaded: 2,
+                failed: 3
+            })
+        ));
+    }
 }

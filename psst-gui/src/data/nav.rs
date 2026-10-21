@@ -7,8 +7,6 @@ use url::Url;
 use crate::data::track::TrackId;
 use crate::data::{AlbumLink, ArtistLink, PlaylistLink, ShowLink};
 
-use super::RecommendationsRequest;
-
 #[derive(Copy, Clone, Debug, Data, PartialEq, Eq, Hash)]
 pub enum Route {
     Home,
@@ -21,7 +19,6 @@ pub enum Route {
     AlbumDetail,
     ShowDetail,
     PlaylistDetail,
-    Recommendations,
 }
 
 #[derive(Clone, Debug, Data, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -37,7 +34,6 @@ pub enum Nav {
     ArtistDetail(ArtistLink),
     PlaylistDetail(PlaylistLink),
     ShowDetail(ShowLink),
-    Recommendations(Arc<RecommendationsRequest>),
 }
 
 impl Nav {
@@ -53,7 +49,6 @@ impl Nav {
             Nav::ArtistDetail(_) => Route::ArtistDetail,
             Nav::PlaylistDetail(_) => Route::PlaylistDetail,
             Nav::ShowDetail(_) => Route::ShowDetail,
-            Nav::Recommendations(_) => Route::Recommendations,
         }
     }
 
@@ -69,7 +64,6 @@ impl Nav {
             Nav::ArtistDetail(link) => link.name.to_string(),
             Nav::PlaylistDetail(link) => link.name.to_string(),
             Nav::ShowDetail(link) => link.name.to_string(),
-            Nav::Recommendations(_) => "Recommended".to_string(),
         }
     }
 
@@ -85,7 +79,6 @@ impl Nav {
             Nav::ArtistDetail(link) => format!("Artist \"{}\"", link.name),
             Nav::PlaylistDetail(link) => format!("Playlist \"{}\"", link.name),
             Nav::ShowDetail(link) => format!("Show \"{}\"", link.name),
-            Nav::Recommendations(_) => "Recommended".to_string(),
         }
     }
 }

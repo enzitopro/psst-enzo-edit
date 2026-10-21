@@ -13,7 +13,7 @@ use crate::{
     cmd,
     data::{
         CommonCtx, FindQuery, MatchFindQuery, Playable, PlaybackOrigin, PlaybackPayload,
-        PlaylistTracks, Recommendations, SavedTracks, SearchResults, ShowEpisodes, Track, WithCtx,
+        PlaylistTracks, SavedTracks, SearchResults, ShowEpisodes, Track, WithCtx,
     },
     ui::theme,
 };
@@ -195,22 +195,6 @@ impl PlayableIter for SavedTracks {
 impl PlayableIter for SearchResults {
     fn origin(&self) -> PlaybackOrigin {
         PlaybackOrigin::Search(self.query.clone())
-    }
-
-    fn for_each(&self, mut cb: impl FnMut(Playable, usize)) {
-        for (position, track) in self.tracks.iter().enumerate() {
-            cb(Playable::Track(track.to_owned()), position);
-        }
-    }
-
-    fn count(&self) -> usize {
-        self.tracks.len()
-    }
-}
-
-impl PlayableIter for Recommendations {
-    fn origin(&self) -> PlaybackOrigin {
-        PlaybackOrigin::Recommendations(self.request.clone())
     }
 
     fn for_each(&self, mut cb: impl FnMut(Playable, usize)) {

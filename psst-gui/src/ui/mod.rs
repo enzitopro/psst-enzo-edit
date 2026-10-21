@@ -45,7 +45,6 @@ pub mod playable;
 pub mod playback;
 pub mod playlist;
 pub mod preferences;
-pub mod recommend;
 pub mod search;
 pub mod show;
 pub mod theme;
@@ -403,11 +402,6 @@ fn route_widget() -> impl Widget<AppState> {
             Route::ShowDetail => Scroll::new(show::detail_widget().padding(theme::grid(1.0)))
                 .vertical()
                 .boxed(),
-            Route::Recommendations => {
-                Scroll::new(recommend::results_widget().padding(theme::grid(1.0)))
-                    .vertical()
-                    .boxed()
-            }
         },
     )
     .expand()
@@ -680,7 +674,7 @@ fn route_icon_widget() -> impl Widget<Nav> {
                 Nav::Home | Nav::Lyrics | Nav::SavedTracks | Nav::SavedAlbums | Nav::Shows => {
                     Empty.boxed()
                 }
-                Nav::SearchResults(_) | Nav::Recommendations(_) => icon(&icons::SEARCH).boxed(),
+                Nav::SearchResults(_) => icon(&icons::SEARCH).boxed(),
                 Nav::AlbumDetail(_, _) => icon(&icons::ALBUM).boxed(),
                 Nav::ArtistDetail(_) => icon(&icons::ARTIST).boxed(),
                 Nav::PlaylistDetail(_) => icon(&icons::PLAYLIST).boxed(),
