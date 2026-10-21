@@ -1,5 +1,4 @@
-use gix_config::File;
-use std::{env, fs, io::Write};
+use std::{env, fs, io::Write, process::Command};
 use time::OffsetDateTime;
 
 fn main() {
@@ -10,11 +9,15 @@ fn main() {
     let now = OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc());
     write!(fh, r#""{now}""#).ok();
 
-    let git_config = File::from_git_dir("../.git/".into()).expect("Git Config not found!");
-    // Get Git's 'Origin' URL
-    let mut remote_url = git_config
-        .raw_value("remote.origin.url")
+    // Asking git also works in a worktree, where `.git` is a file.  The
+    // `git_version!` macro needs git at build time anyway.
+    let output = Command::new("git")
+        .args(["config", "--get", "remote.origin.url"])
+        .output()
+        .expect("git not found");
+    let mut remote_url = String::from_utf8(output.stdout)
         .expect("Couldn't extract origin url!")
+        .trim()
         .to_string();
 
     // Check whether origin is accessed via ssh

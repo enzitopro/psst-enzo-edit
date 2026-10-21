@@ -6,7 +6,6 @@ edition = "2021"
 
 
 [build-dependencies]
-gix-config = "0.45.1"
 time = { version = "0.3.36", features = ["local-offset"] }
 
 [dependencies]
