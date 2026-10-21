@@ -2173,6 +2173,48 @@ impl WebApi {
         })
     }
 
+    /// The top artists and tracks of a genre by Last.fm's tags, found on Spotify:
+    /// Spotify's own `genre:` filter misses the niche ones.
+    pub fn search_genre(&self, tag: &str, lastfm_api_key: &str) -> Result<SearchResults, Error> {
+        let (artists, tracks) = psst_core::lastfm::tag_top(lastfm_api_key, tag, 10, 20)
+            .map_err(|err| Error::WebApiError(format!("Last.fm: {err}")))?;
+        let same = |a: &str, b: &str| a.to_lowercase() == b.to_lowercase();
+        // A search per name, about 30, so only matching names are kept.
+        let artists = fetch_pages(&(0..artists.len()).collect_vec(), |i| {
+            let found = self.search(&artists[i], &[SearchTopic::Artist], 5)?;
+            Ok(found
+                .artists
+                .into_iter()
+                .find(|a| same(&a.name, &artists[i])))
+        })?;
+        let tracks = fetch_pages(&(0..tracks.len()).collect_vec(), |i| {
+            let (artist, title) = &tracks[i];
+            let query = format!(
+                "track:\"{}\" artist:\"{}\"",
+                title.replace('"', ""),
+                artist.replace('"', "")
+            );
+            let found = self.search(&query, &[SearchTopic::Track], 5)?;
+            Ok(found
+                .tracks
+                .into_iter()
+                .find(|track| track.artists.iter().any(|a| same(&a.name, artist))))
+        })?;
+        Ok(SearchResults {
+            query: tag.into(),
+            topic: Some(SearchTopic::Genre),
+            artists: artists.into_iter().flatten().collect(),
+            albums: Vector::new(),
+            tracks: tracks
+                .into_iter()
+                .flatten()
+                .unique_by(|track| track.id)
+                .collect(),
+            playlists: Vector::new(),
+            shows: Vector::new(),
+        })
+    }
+
     pub fn load_spotify_link(&self, link: &SpotifyUrl) -> Result<Nav, Error> {
         let nav = match link {
             SpotifyUrl::Playlist(id) => Nav::PlaylistDetail(self.get_playlist(id)?.link()),

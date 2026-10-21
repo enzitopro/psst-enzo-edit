@@ -11,7 +11,8 @@ use druid::{
 use crate::{
     cmd,
     controller::InputController,
-    data::{AppState, Ctx, Nav, Search, SearchResults, SearchTopic, SpotifyUrl, WithCtx},
+    data::{AppState, Config, Ctx, Nav, Search, SearchResults, SearchTopic, SpotifyUrl, WithCtx},
+    error::Error,
     ui::show,
     webapi::WebApi,
     widget::{Async, Empty, MyWidgetExt},
@@ -58,6 +59,9 @@ fn topic_widget() -> impl Widget<AppState> {
         topics.add_default_spacer();
         topics.add_child(topic_button(topic.display_name(), Some(topic)));
     }
+    let genre = SearchTopic::Genre;
+    topics.add_default_spacer();
+    topics.add_child(topic_button(genre.display_name(), Some(genre)));
 
     Scroll::new(
         topics
@@ -106,6 +110,16 @@ fn async_results_widget() -> impl Widget<AppState> {
     .on_command_async(
         LOAD_RESULTS,
         |(q, t)| {
+            if t == Some(SearchTopic::Genre) {
+                // No app state off the UI thread, but the key is saved when set.
+                let key = Config::load().and_then(|config| config.lastfm_api_key);
+                let key = key.ok_or_else(|| {
+                    Error::WebApiError(
+                        "Genre search needs a Last.fm API key, see Preferences".into(),
+                    )
+                })?;
+                return WebApi::global().search_genre(&q, &key);
+            }
             let topics = t
                 .map(|t| vec![t])
                 .unwrap_or_else(|| SearchTopic::all().to_vec());
@@ -152,7 +166,10 @@ fn loaded_results_widget() -> impl Widget<WithCtx<SearchResults>> {
             .padding(theme::grid(6.0))
             .center(),
         Either::new(
-            |results: &WithCtx<SearchResults>, _| results.data.topic.is_some(),
+            // A genre has artists and tracks, so it keeps the headers.
+            |results: &WithCtx<SearchResults>, _| {
+                results.data.topic.is_some_and(|t| t != SearchTopic::Genre)
+            },
             results_list(false),
             results_list(true),
         ),

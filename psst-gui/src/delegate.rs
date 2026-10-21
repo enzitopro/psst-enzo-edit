@@ -1,7 +1,7 @@
 use directories::UserDirs;
 use druid::{
-    commands, AppDelegate, Application, Command, DelegateCtx, Env, Event, Handled, Target,
-    WindowDesc, WindowId,
+    commands, AppDelegate, Application, Code, Command, DelegateCtx, Env, Event, Handled,
+    KeyEvent, Target, WindowDesc, WindowId,
 };
 use std::fs;
 use threadpool::ThreadPool;
@@ -13,7 +13,7 @@ use crate::ui::theme;
 use crate::ui::DOWNLOAD_ARTWORK;
 use crate::{
     cmd,
-    data::{AppState, Config},
+    data::{AppState, Config, Nav},
     ui,
     webapi::WebApi,
     widget::remote_image,
@@ -285,6 +285,13 @@ impl AppDelegate<AppState> for Delegate {
                     data.config.window_size = size;
                 }
             }
+            // Here rather than in a widget: widgets only get keys on the focus path.
+            if let Event::KeyDown(key) = &event {
+                if let Some(command) = shortcut(key) {
+                    ctx.submit_command(command);
+                    return None;
+                }
+            }
         } else if [
             self.preferences_window,
             self.artwork_window,
@@ -301,6 +308,26 @@ impl AppDelegate<AppState> for Delegate {
         }
         Some(event)
     }
+}
+
+/// Ctrl+F finds in the open list, Ctrl+L goes to the search box and Ctrl+1–5
+/// open the sidebar pages.
+fn shortcut(key: &KeyEvent) -> Option<Command> {
+    // AltGr is Ctrl+Alt on Windows, and types characters.
+    if !key.mods.ctrl() || key.mods.alt() {
+        return None;
+    }
+    let nav = match key.code {
+        Code::KeyF => return Some(cmd::TOGGLE_FINDER.into()),
+        Code::KeyL => return Some(cmd::SET_FOCUS.to(cmd::WIDGET_SEARCH_INPUT)),
+        Code::Digit1 => Nav::Home,
+        Code::Digit2 => Nav::SavedTracks,
+        Code::Digit3 => Nav::SavedAlbums,
+        Code::Digit4 => Nav::SavedArtists,
+        Code::Digit5 => Nav::Shows,
+        _ => return None,
+    };
+    Some(cmd::NAVIGATE.with(nav))
 }
 
 impl Delegate {
@@ -342,5 +369,29 @@ impl Delegate {
         } else {
             Handled::No
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use druid::Modifiers;
+
+    use super::*;
+
+    #[test]
+    fn shortcuts_need_ctrl_but_not_altgr() {
+        let key = |code, mods| {
+            let mut key = KeyEvent::default();
+            (key.code, key.mods) = (code, mods);
+            key
+        };
+        let nav = |code, mods| shortcut(&key(code, mods))?.get(cmd::NAVIGATE).cloned();
+        assert_eq!(nav(Code::Digit1, Modifiers::CONTROL), Some(Nav::Home));
+        assert_eq!(nav(Code::Digit4, Modifiers::CONTROL), Some(Nav::SavedArtists));
+        assert!(shortcut(&key(Code::Digit1, Modifiers::empty())).is_none());
+        assert!(shortcut(&key(Code::Digit1, Modifiers::CONTROL | Modifiers::ALT)).is_none());
+        assert!(shortcut(&key(Code::KeyF, Modifiers::CONTROL))
+            .unwrap()
+            .is(cmd::TOGGLE_FINDER));
     }
 }

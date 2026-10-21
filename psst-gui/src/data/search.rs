@@ -18,6 +18,8 @@ pub enum SearchTopic {
     Track,
     Playlist,
     Show,
+    /// Last.fm's top artists and tracks of a genre, found on Spotify.
+    Genre,
 }
 
 impl SearchTopic {
@@ -28,6 +30,7 @@ impl SearchTopic {
             SearchTopic::Track => "track",
             SearchTopic::Playlist => "playlist",
             SearchTopic::Show => "show",
+            SearchTopic::Genre => "genre",
         }
     }
 
@@ -38,9 +41,11 @@ impl SearchTopic {
             SearchTopic::Track => "Tracks",
             SearchTopic::Playlist => "Playlists",
             SearchTopic::Show => "Podcasts",
+            SearchTopic::Genre => "Genre",
         }
     }
 
+    /// The Spotify topics, searched all at once by default.
     pub fn all() -> &'static [Self] {
         &[
             Self::Artist,

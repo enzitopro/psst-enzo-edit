@@ -1004,3 +1004,28 @@ fn diagnostics_rate_limits() {
     println!("playlists:    {}", short(api.get_playlists().map(|p| format!("ok {}", p.len()))));
     println!("artists:      {}", short(api.get_followed_artists().map(|a| format!("ok {}", a.len()))));
 }
+
+/// A niche genre through Last.fm's tags, found on Spotify.
+#[test]
+#[ignore]
+fn diagnostics_genre_search() {
+    let mut config = Config::load().expect("Psst config not found, log in first");
+    init(&mut config);
+    let key = config.lastfm_api_key.clone().expect("Last.fm API key");
+    let tag = std::env::var("PSST_DIAG_GENRE").unwrap_or_else(|_| "jerk".into());
+    let started = Instant::now();
+    let results = WebApi::global().search_genre(&tag, &key).expect("genre search");
+    println!(
+        "{tag}: {} artists, {} tracks in {:?}",
+        results.artists.len(),
+        results.tracks.len(),
+        started.elapsed()
+    );
+    for artist in &results.artists {
+        println!("  artist {} ({} images)", artist.name, artist.images.len());
+    }
+    for track in &results.tracks {
+        println!("  track {} - {}", track.artist_name(), track.name);
+    }
+    assert!(!results.artists.is_empty() && !results.tracks.is_empty());
+}

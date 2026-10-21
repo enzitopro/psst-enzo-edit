@@ -91,15 +91,19 @@ impl Scrobbler {
                 .map(|album| ("album", album)),
         );
         params.extend(timestamp.map(|timestamp| ("timestamp", timestamp)));
-        call(&self.api_secret, params).map(|_| ())
+        call(Some(&self.api_secret), params).map(|_| ())
     }
 }
 
-/// Sends a signed Last.fm API call and returns the JSON response.
-fn call(api_secret: &str, mut params: Vec<(&str, &str)>) -> Result<serde_json::Value, Error> {
-    let api_sig = signature(api_secret, &mut params);
+/// Sends a Last.fm API call, signed when given the secret (read-only methods
+/// need none), and returns the JSON response.
+fn call(
+    api_secret: Option<&str>,
+    mut params: Vec<(&str, &str)>,
+) -> Result<serde_json::Value, Error> {
+    let api_sig = api_secret.map(|secret| signature(secret, &mut params));
     let mut params: Vec<(&str, &str)> = params;
-    params.push(("api_sig", &api_sig));
+    params.extend(api_sig.as_deref().map(|sig| ("api_sig", sig)));
     params.push(("format", "json"));
 
     // A fresh agent per call: these are minutes apart, and pooled sockets go stale
@@ -155,10 +159,52 @@ pub fn exchange_token_for_session(
         ("api_key", api_key),
         ("token", token),
     ];
-    call(api_secret, params)?["session"]["key"]
+    call(Some(api_secret), params)?["session"]["key"]
         .as_str()
         .map(String::from)
         .ok_or_else(|| Error::ScrobblerError("no session key in the response".to_string()))
+}
+
+/// Artist names, and the (artist, title) of tracks.
+pub type TagTop = (Vec<String>, Vec<(String, String)>);
+
+/// The top artists and tracks of a Last.fm tag.  Tags are how Last.fm listeners
+/// file genres, niche ones too.
+pub fn tag_top(api_key: &str, tag: &str, artists: usize, tracks: usize) -> Result<TagTop, Error> {
+    let top = |method, limit: usize| {
+        let limit = limit.to_string();
+        let params = vec![
+            ("method", method),
+            ("api_key", api_key),
+            ("tag", tag),
+            ("limit", &limit),
+        ];
+        call(None, params)
+    };
+    let artists = top("tag.gettopartists", artists)?;
+    let tracks = top("tag.gettoptracks", tracks)?;
+    Ok((tag_artists(&artists), tag_tracks(&tracks)))
+}
+
+fn tag_artists(json: &serde_json::Value) -> Vec<String> {
+    let artists = json["topartists"]["artist"].as_array();
+    artists
+        .into_iter()
+        .flatten()
+        .filter_map(|artist| Some(artist["name"].as_str()?.to_string()))
+        .collect()
+}
+
+fn tag_tracks(json: &serde_json::Value) -> Vec<(String, String)> {
+    let tracks = json["tracks"]["track"].as_array();
+    tracks
+        .into_iter()
+        .flatten()
+        .filter_map(|track| {
+            let artist = track["artist"]["name"].as_str()?;
+            Some((artist.to_string(), track["name"].as_str()?.to_string()))
+        })
+        .collect()
 }
 
 /// Listen for a Last.fm token from the callback
@@ -187,5 +233,21 @@ mod tests {
             "47656600a9b4352066d3092b68e9036b"
         );
         assert_eq!(params[0].0, "api_key");
+    }
+
+    #[test]
+    fn reads_tag_top_names() {
+        let artists = serde_json::json!({ "topartists": { "artist": [
+            { "name": "Ken Carson", "url": "u" }, { "url": "no name" }, { "name": "Yeat" }
+        ] } });
+        assert_eq!(tag_artists(&artists), ["Ken Carson", "Yeat"]);
+        let tracks = serde_json::json!({ "tracks": { "track": [
+            { "name": "Overseas", "artist": { "name": "Ken Carson" } },
+            { "name": "No artist" }
+        ] } });
+        let expected = [("Ken Carson".to_string(), "Overseas".to_string())];
+        assert_eq!(tag_tracks(&tracks), expected);
+        // An unknown tag answers an empty list, or none at all.
+        assert!(tag_tracks(&serde_json::json!({ "tracks": {} })).is_empty());
     }
 }
