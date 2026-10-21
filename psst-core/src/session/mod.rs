@@ -50,6 +50,8 @@ pub struct SessionConfig {
 pub struct SessionService {
     connected: Arc<Mutex<Option<SessionWorker>>>,
     config: Arc<Mutex<Option<SessionConfig>>>,
+    /// What `is_connected` saw last, for when `connected` is busy connecting.
+    was_connected: Arc<AtomicBool>,
 }
 
 impl SessionService {
@@ -59,6 +61,7 @@ impl SessionService {
         Self {
             connected: Arc::default(),
             config: Arc::default(),
+            was_connected: Arc::default(),
         }
     }
 
@@ -67,6 +70,7 @@ impl SessionService {
         Self {
             connected: Arc::default(),
             config: Arc::new(Mutex::new(Some(config))),
+            was_connected: Arc::default(),
         }
     }
 
@@ -80,8 +84,16 @@ impl SessionService {
     /// Returns true if a session worker is actively servicing the connected
     /// session.  We return false here after any case of I/O errors or an
     /// explicit session shutdown.
+    /// Never waits: `connected` holds the lock for the whole connection setup,
+    /// seconds on a bad network, and the UI asks this while drawing, which froze
+    /// the window.  While the lock is busy, the last answer stands.
     pub fn is_connected(&self) -> bool {
-        matches!(self.connected.lock().as_ref(), Some(worker) if !worker.has_terminated())
+        let Some(connected) = self.connected.try_lock() else {
+            return self.was_connected.load(Ordering::Relaxed);
+        };
+        let is_connected = matches!(connected.as_ref(), Some(worker) if !worker.has_terminated());
+        self.was_connected.store(is_connected, Ordering::Relaxed);
+        is_connected
     }
 
     /// Return a handle for the connected session.  In case no connection is
@@ -409,5 +421,26 @@ fn parse_country_code(msg: ShannonMsg) -> Result<String, Error> {
 impl From<serde_json::Error> for Error {
     fn from(error: serde_json::Error) -> Self {
         Error::JsonError(Box::new(error))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{Duration, Instant};
+
+    use super::*;
+
+    #[test]
+    fn is_connected_never_waits_for_a_connection_in_progress() {
+        let service = SessionService::empty();
+        // Like `connected` while it sets up a slow connection.
+        let connecting = service.connected.lock();
+        let started = Instant::now();
+        let other = service.clone();
+        let answer = thread::spawn(move || other.is_connected()).join().unwrap();
+        assert!(!answer);
+        assert!(started.elapsed() < Duration::from_secs(1));
+        drop(connecting);
+        assert!(!service.is_connected());
     }
 }

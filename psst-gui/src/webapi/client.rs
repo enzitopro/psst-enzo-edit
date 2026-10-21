@@ -485,7 +485,8 @@ impl WebApi {
         request: &RequestBuilder,
     ) -> Result<Vector<T>, Error> {
         const PAGE_SIZE: usize = 50;
-        const THREADS: usize = 4;
+        // More made Spotify answer "too many requests" a few dozen times at startup.
+        const THREADS: usize = 2;
 
         let page = |offset: usize| -> Result<Page<T>, Error> {
             self.load(
