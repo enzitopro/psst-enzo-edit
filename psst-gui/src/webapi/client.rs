@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fmt::Display,
     io::{self, Read},
     path::PathBuf,
@@ -60,6 +60,8 @@ pub struct WebApi {
     session: Mutex<Option<SessionService>>,
     login5: Login5,
     client_token_provider: ClientTokenProviderHandle,
+    /// Cached responses, as `bucket/key`, to fetch again on their next load.
+    stale: Mutex<HashSet<String>>,
 }
 
 impl WebApi {
@@ -87,6 +89,7 @@ impl WebApi {
             session: Mutex::new(None),
             login5: Login5::new(Some(Arc::clone(&client_token_provider)), proxy_url),
             client_token_provider,
+            stale: Mutex::default(),
         }
     }
 
@@ -349,6 +352,12 @@ impl WebApi {
         }
     }
 
+    /// The next load of this cached response fetches it again, still falling
+    /// back to the copy when that fails.
+    pub fn refresh_cached(&self, bucket: &str, key: &str) {
+        self.stale.lock().insert(format!("{bucket}/{key}"));
+    }
+
     /// Send a request, unless a recent copy of the response is in the cache.
     /// Older copies are refreshed (new releases, new episodes) but still used when
     /// that fails, e.g. offline.  Unreadable copies count as missing.
@@ -371,8 +380,9 @@ impl WebApi {
                 .and_then(|at| at.elapsed().ok())
                 .is_some_and(|age| age < MAX_AGE)
         };
+        let refresh = self.stale.lock().remove(&format!("{bucket}/{key}"));
         match cached {
-            Some(cached) if is_recent(&cached) => Ok(cached),
+            Some(cached) if is_recent(&cached) && !refresh => Ok(cached),
             stale => {
                 let fetched: Result<Cached<T>, Error> = (|| {
                     let response = Self::with_retry(|| self.request(request))?;
@@ -2424,6 +2434,10 @@ mod load_cached_tests {
 
         api.cache.set("test", "key", br#""recent""#);
         assert_eq!(load().unwrap().data, "recent");
+        // A reload asks once even for a recent copy, and keeps it when that fails.
+        api.refresh_cached("test", "key");
+        assert_eq!(load().unwrap().data, "recent");
+        assert!(api.stale.lock().is_empty());
 
         // Too old to trust, but better than nothing when the refresh fails.
         let old = SystemTime::now() - Duration::from_secs(30 * 24 * 60 * 60);

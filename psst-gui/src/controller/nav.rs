@@ -3,7 +3,8 @@ use std::time::Duration;
 use crate::{
     cmd,
     data::{AppState, Nav, PromiseState, SpotifyUrl},
-    ui::{album, artist, library, lyrics, playlist, search, show},
+    ui::{album, artist, home, library, lyrics, playlist, search, show},
+    webapi::WebApi,
 };
 use druid::widget::{prelude::*, Controller};
 use druid::Code;
@@ -11,6 +12,33 @@ use druid::Code;
 pub struct NavController;
 
 impl NavController {
+    /// Ctrl+R and the Retry buttons: the page again, fetched even when cached,
+    /// and the sidebar's playlists if they failed.
+    fn reload(&self, ctx: &mut EventCtx, data: &mut AppState) {
+        let api = WebApi::global();
+        match &data.nav {
+            Nav::AlbumDetail(link, _) => api.refresh_cached("album", &link.id),
+            Nav::ArtistDetail(link) => {
+                api.refresh_cached("artist", &link.id);
+                api.refresh_cached("artist-overview", &link.id);
+            }
+            Nav::ShowDetail(link) => api.refresh_cached("show", &link.id),
+            _ => {}
+        }
+        data.refresh_all();
+        if data.library.playlists.state() == PromiseState::Rejected {
+            ctx.submit_command(playlist::LOAD_LIST);
+        }
+        // Loaded pages of the library stay loaded otherwise.
+        match data.nav {
+            Nav::Home => ctx.submit_command(home::LOAD_MADE_FOR_YOU),
+            Nav::SavedTracks => ctx.submit_command(library::LOAD_TRACKS),
+            Nav::SavedAlbums => ctx.submit_command(library::LOAD_ALBUMS),
+            Nav::Shows => ctx.submit_command(library::LOAD_SHOWS),
+            _ => self.load_route_data(ctx, data),
+        }
+    }
+
     fn load_route_data(&self, ctx: &mut EventCtx, data: &mut AppState) {
         match &data.nav {
             Nav::Home => {}
@@ -135,9 +163,12 @@ where
                 self.load_route_data(ctx, data);
             }
             Event::KeyDown(key) if key.mods.ctrl() && key.code == Code::KeyR => {
-                data.refresh_all();
                 ctx.set_handled();
-                self.load_route_data(ctx, data);
+                self.reload(ctx, data);
+            }
+            Event::Command(cmd) if cmd.is(cmd::RELOAD) => {
+                ctx.set_handled();
+                self.reload(ctx, data);
             }
             _ => {
                 child.event(ctx, event, data, env);

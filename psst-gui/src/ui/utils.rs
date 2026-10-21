@@ -2,12 +2,12 @@ use std::{f64::consts::PI, time::Duration};
 
 use druid::{
     kurbo::Circle,
-    widget::{prelude::*, CrossAxisAlignment, Flex, Label, SizedBox},
+    widget::{prelude::*, Button, CrossAxisAlignment, Flex, Label, SizedBox},
     Data, Point, Vec2, Widget, WidgetExt, WidgetPod,
 };
 use time_humanize::HumanTime;
 
-use crate::{data::WithCtx, error::Error, widget::icons};
+use crate::{cmd, data::WithCtx, error::Error, widget::icons};
 
 use super::theme;
 
@@ -112,7 +112,9 @@ pub fn error_widget() -> impl Widget<Error> {
             Label::dynamic(|err: &Error, _| err.to_string())
                 .with_text_size(theme::TEXT_SIZE_SMALL)
                 .with_text_color(theme::PLACEHOLDER_COLOR),
-        );
+        )
+        .with_default_spacer()
+        .with_child(Button::new("Retry").on_click(|ctx, _, _| ctx.submit_command(cmd::RELOAD)));
     Flex::row()
         .with_child(icon)
         .with_default_spacer()
