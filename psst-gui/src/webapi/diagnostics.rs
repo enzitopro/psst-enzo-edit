@@ -955,3 +955,52 @@ fn diagnostics_saved_tracks_count() {
     let unique: std::collections::HashSet<_> = tracks.iter().map(|t| t.id).collect();
     println!("{} unique", unique.len());
 }
+
+/// The token refresh fails fast with a bad refresh token (the real one is left
+/// alone), covers load without the Web API token, and playlist tracks are
+/// relinked like the saved ones, so liked tracks show as liked.
+#[test]
+#[ignore]
+fn diagnostics_refresh_images_and_liked() {
+    use crate::data::SearchTopic;
+    let mut config = Config::load().expect("Psst config not found, log in first");
+    init(&mut config);
+    let client_id = config.webapi_client_id_value().expect("client id").to_string();
+    let started = std::time::Instant::now();
+    let refused = psst_core::oauth::refresh_webapi_token(&client_id, "not-a-refresh-token");
+    println!("bad refresh token: {:?} in {:?}", refused.as_ref().err(), started.elapsed());
+    assert!(refused.is_err() && started.elapsed() < std::time::Duration::from_secs(10));
+
+    let api = WebApi::global();
+    let id = std::env::var("PSST_DIAG_PLAYLIST").expect("PSST_DIAG_PLAYLIST");
+    let tracks = api.get_all_playlist_tracks(&id).expect("playlist");
+    let cover = tracks
+        .iter()
+        .find_map(|t| t.album.as_ref()?.images.front().map(|i| i.url.clone()))
+        .expect("a cover");
+    let image = api.get_image(cover).expect("cover without a token");
+    println!("cover: {}x{}", image.width(), image.height());
+
+    let saved = api.get_saved_tracks().expect("saved");
+    let saved: std::collections::HashSet<_> = saved.iter().map(|t| t.id).collect();
+    let liked = tracks.iter().filter(|t| saved.contains(&t.id)).count();
+    println!("playlist: {} tracks, {} liked", tracks.len(), liked);
+    let found = api.search("Yeat", &[SearchTopic::Track], 5).expect("search");
+    println!("search: {} tracks", found.tracks.len());
+}
+
+/// Which Web API calls work right now (rate limits).
+#[test]
+#[ignore]
+fn diagnostics_rate_limits() {
+    use crate::data::SearchTopic;
+    let mut config = Config::load().expect("Psst config not found, log in first");
+    init(&mut config);
+    let api = WebApi::global();
+    let short = |r: Result<String, crate::error::Error>| r.unwrap_or_else(|e| format!("FAILED {e}"));
+    println!("search:       {}", short(api.search("Yeat", &[SearchTopic::Track], 5).map(|r| format!("ok {}", r.tracks.len()))));
+    println!("playlist:     {}", short(api.get_playlist("0yDMZSlNmBSXnntlKAl33K").map(|p| format!("ok {}", p.name))));
+    println!("saved albums: {}", short(api.get_saved_albums().map(|a| format!("ok {}", a.len()))));
+    println!("playlists:    {}", short(api.get_playlists().map(|p| format!("ok {}", p.len()))));
+    println!("artists:      {}", short(api.get_followed_artists().map(|a| format!("ok {}", a.len()))));
+}

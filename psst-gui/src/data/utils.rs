@@ -1,5 +1,8 @@
 use std::{
     convert::TryFrom,
+    fs::{self, File},
+    io::{self, Write},
+    path::Path,
     sync::Arc,
     time::{Duration, SystemTime},
 };
@@ -159,4 +162,15 @@ where
 pub fn sanitize_html_string(text: &str) -> Arc<str> {
     let sanitized = sanitize_str(&DEFAULT, text).unwrap_or_default();
     Arc::from(sanitized.replace("&amp;", "&"))
+}
+
+/// Writes `path` through a temporary file swapped in at the end, so a crash or a
+/// power cut while writing never leaves it half written.
+pub fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let tmp_path = path.with_extension("tmp");
+    let mut file = File::create(&tmp_path)?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    drop(file);
+    fs::rename(&tmp_path, path)
 }

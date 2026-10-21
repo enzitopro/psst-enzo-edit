@@ -1,7 +1,7 @@
-use crate::error::Error;
+use crate::{error::Error, util::default_ureq_agent_builder};
 use oauth2::{
     basic::BasicClient, reqwest::http_client, AuthUrl, AuthorizationCode, ClientId, CsrfToken,
-    PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, RefreshToken, Scope, TokenResponse, TokenUrl,
+    PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, Scope, TokenResponse, TokenUrl,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -21,9 +21,7 @@ pub fn listen_for_callback_parameter(
     timeout: Duration,
     parameter_name: &'static str,
 ) -> Result<String, Error> {
-    log::info!(
-        "starting callback listener for '{parameter_name}' on {socket_address:?}",
-    );
+    log::info!("starting callback listener for '{parameter_name}' on {socket_address:?}",);
     let listener = TcpListener::bind(socket_address).map_err(|e| {
         log::error!("Failed to bind listener: {e}");
         Error::IoError(e)
@@ -272,42 +270,62 @@ pub fn exchange_webapi_code_for_token(
 }
 
 /// Refresh a Web API token using a refresh token (no browser interaction needed).
+/// A plain request on a fresh connection with short timeouts, tried a few times:
+/// through `oauth2`'s client a dead pooled connection made it hang for 40s, and
+/// every Web API request waits for the token meanwhile.
 pub fn refresh_webapi_token(
     client_id: &str,
     refresh_token_str: &str,
 ) -> Result<WebApiToken, Error> {
-    // For refresh, the redirect_port doesn't matter (no redirect happens),
-    // but the client needs to be configured with the same redirect URI.
-    let client = create_oauth_client(client_id, 8888);
+    #[derive(Deserialize)]
+    struct TokenResponse {
+        access_token: String,
+        // Spotify may or may not return a new refresh token; if not, keep the old one.
+        #[serde(default)]
+        refresh_token: Option<String>,
+        #[serde(default)]
+        expires_in: Option<u64>,
+    }
+    const ATTEMPTS: usize = 3;
 
-    let refresh_token = RefreshToken::new(refresh_token_str.to_string());
-
-    let token_response = client
-        .exchange_refresh_token(&refresh_token)
-        .request(http_client)
-        .map_err(|e| Error::OAuthError(format!("Failed to refresh Web API token: {e}")))?;
-
+    let form = [
+        ("grant_type", "refresh_token"),
+        ("refresh_token", refresh_token_str),
+        ("client_id", client_id),
+    ];
+    let mut attempt = 1;
+    let response: TokenResponse = loop {
+        let agent: ureq::Agent = default_ureq_agent_builder(None).build().into();
+        match agent
+            .post("https://accounts.spotify.com/api/token")
+            .send_form(form)
+            .and_then(|mut response| response.body_mut().read_json())
+        {
+            Ok(response) => break response,
+            // Refused (e.g. a revoked refresh token): asking again won't help.
+            Err(err) if attempt == ATTEMPTS || matches!(err, ureq::Error::StatusCode(_)) => {
+                return Err(Error::OAuthError(format!(
+                    "Failed to refresh Web API token: {err}"
+                )));
+            }
+            Err(err) => {
+                log::info!("token refresh failed ({err}), retrying");
+                attempt += 1;
+            }
+        }
+    };
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-
-    let expires_in = token_response
-        .expires_in()
-        .unwrap_or(Duration::from_secs(3600))
-        .as_secs();
-
-    // Spotify may or may not return a new refresh token on refresh.
-    // If it doesn't, we keep the old one.
-    let new_refresh_token = token_response
-        .refresh_token()
-        .map(|t| t.secret().to_string())
-        .unwrap_or_else(|| refresh_token_str.to_string());
-
     Ok(WebApiToken {
-        access_token: token_response.access_token().secret().to_string(),
-        refresh_token: Some(new_refresh_token),
-        expires_at: now + expires_in,
+        access_token: response.access_token,
+        refresh_token: Some(
+            response
+                .refresh_token
+                .unwrap_or_else(|| refresh_token_str.to_string()),
+        ),
+        expires_at: now + response.expires_in.unwrap_or(3600),
     })
 }
 
@@ -316,14 +334,20 @@ mod tests {
     use super::*;
 
     fn free_port_address() -> SocketAddr {
-        TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap()
+        TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
     }
 
     #[test]
     fn skips_other_requests_and_returns_the_parameter() {
         let address = free_port_address();
         let browser = thread::spawn(move || {
-            for request in ["GET /favicon.ico HTTP/1.1", "GET /callback?code=abc HTTP/1.1"] {
+            for request in [
+                "GET /favicon.ico HTTP/1.1",
+                "GET /callback?code=abc HTTP/1.1",
+            ] {
                 thread::sleep(Duration::from_millis(200));
                 let mut stream = TcpStream::connect(address).unwrap();
                 write!(stream, "{request}\r\n\r\n").unwrap();

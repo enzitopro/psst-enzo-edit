@@ -613,7 +613,7 @@ where
                     .and_then(|playlist| playlist.track_count);
                 let playlist = track_count.map(|count| (link.id.clone(), count));
                 self.download(ctx, playlist, move || {
-                    WebApi::global().get_playlist_tracks(&link.id)
+                    WebApi::global().get_all_playlist_tracks(&link.id)
                 });
                 ctx.set_handled();
             }

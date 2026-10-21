@@ -382,14 +382,6 @@ impl PlaylistResponse {
             .map_or(0, |content| content.total_count)
     }
 
-    pub fn item_count(&self) -> usize {
-        self.data
-            .playlist
-            .content
-            .as_ref()
-            .map_or(0, |content| content.items.len())
-    }
-
     /// Tracks of this page.  Local items are resolved against the local files
     /// index, episodes and unknown items are skipped.
     pub fn into_tracks(self, local_library: Option<&LocalLibrary>) -> Vec<Arc<Track>> {
@@ -876,7 +868,6 @@ mod tests {
         let playlist = response.playlist().unwrap();
         assert_eq!(&*playlist.name, "Daily Mix 2");
         assert_eq!(playlist.track_count, Some(3));
-        assert_eq!(response.item_count(), 4);
 
         let tracks = response.into_tracks(None);
         assert_eq!(tracks.len(), 2);

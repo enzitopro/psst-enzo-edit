@@ -1,16 +1,16 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Instant};
 
 use druid::{
     im::Vector,
     widget::{Either, Flex, Label, List},
-    LensExt, Selector, Widget, WidgetExt,
+    Data, LensExt, Selector, Widget, WidgetExt,
 };
 
 use crate::{
     cmd,
     data::{
-        Album, AlbumLink, AppState, Ctx, Library, Nav, PlaylistLink, SavedAlbums, SavedTracks,
-        Show, ShowLink, Track, TrackId,
+        Album, AlbumLink, AppState, Ctx, Library, Nav, PlaylistLink, Promise, SavedAlbums,
+        SavedTracks, Show, ShowLink, Track, TrackId,
     },
     error::Error,
     ui::home::{shows_that_you_might_like, your_shows},
@@ -47,7 +47,8 @@ pub fn saved_tracks_widget() -> impl Widget<AppState> {
                         title: true,
                         artist: true,
                         album: true,
-                        cover: true,
+                        // 4000 rows would ask for 4000 covers at once.
+                        cover: false,
                         ..track::Display::empty()
                     },
                 },
@@ -112,9 +113,24 @@ pub fn followed_artists_widget() -> impl Widget<AppState> {
         .on_command_async(
             LOAD_ARTISTS,
             |_| WebApi::global().get_followed_artists(),
-            |_, data, _| data.with_library_mut(|library| library.followed_artists.defer_default()),
-            |_, data, r| data.with_library_mut(|library| library.followed_artists.update(r)),
+            |_, data, _| {
+                // A refresh keeps showing what's there.
+                if !data.library.followed_artists.is_resolved() {
+                    data.with_library_mut(|library| library.followed_artists.defer_default());
+                }
+            },
+            |_, data, (_, result)| {
+                data.with_library_mut(|library| refreshed(&mut library.followed_artists, result))
+            },
         )
+}
+
+/// Puts a load's result in place, except a failed refresh, which keeps the old data.
+fn refreshed<T: Data>(promise: &mut Promise<T>, result: Result<T, Error>) {
+    match result {
+        Err(err) if promise.is_resolved() => log::warn!("refresh failed, keeping old data: {err}"),
+        result => promise.resolve_or_reject((), result),
+    }
 }
 
 /// Likes the fetched tracks, leaving out local files (they aren't on Spotify).
@@ -127,8 +143,11 @@ fn like_all(tracks: Result<Vector<Arc<Track>>, Error>) -> Result<Vector<Arc<Trac
 fn liked_all(data: &mut AppState, result: Result<Vector<Arc<Track>>, Error>) {
     match result {
         Ok(tracks) => {
-            let mut added = 0;
-            data.with_library_mut(|library| added = library.add_tracks(tracks));
+            // Before the saved tracks load, the new ones can't be told apart.
+            let mut added = tracks.len();
+            if data.library.saved_tracks.is_resolved() {
+                data.with_library_mut(|library| added = library.add_tracks(tracks));
+            }
             data.info_alert(format!("Added {added} songs to Liked Songs"));
         }
         Err(err) => data.error_alert(format!("Couldn't like the songs: {err}")),
@@ -141,7 +160,7 @@ pub fn saved_tracks_loader() -> impl Widget<AppState> {
     Empty
         .on_command_async(
             LIKE_PLAYLIST,
-            |link| like_all(WebApi::global().get_playlist_tracks(&link.id)),
+            |link| like_all(WebApi::global().get_all_playlist_tracks(&link.id)),
             |_, data: &mut AppState, link| {
                 data.info_alert(format!("Adding \"{}\" to Liked Songs…", link.name))
             },
@@ -163,14 +182,14 @@ pub fn saved_tracks_loader() -> impl Widget<AppState> {
             LOAD_TRACKS,
             |_| WebApi::global().get_saved_tracks().map(SavedTracks::new),
             |_, data: &mut AppState, _| {
-                data.with_library_mut(|library| {
-                    library.saved_tracks.defer_default();
+                data.with_library_mut(|library| match library.saved_tracks.resolved_mut() {
+                    // A refresh: keep showing what's there, and don't start another soon.
+                    Some(saved) => saved.loaded_at = Instant::now(),
+                    None => library.saved_tracks.defer_default(),
                 });
             },
-            |_, data, r| {
-                data.with_library_mut(|library| {
-                    library.saved_tracks.update(r);
-                });
+            |_, data, (_, result)| {
+                data.with_library_mut(|library| refreshed(&mut library.saved_tracks, result));
                 data.resort_tracks();
             },
         )

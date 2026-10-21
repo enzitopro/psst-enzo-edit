@@ -434,13 +434,12 @@ impl Library {
             .into_iter()
             .filter(|track| seen.insert(track.id).is_none())
             .collect();
-        // The newest saved tracks come first in "date added" order.
-        for saved_track in saved.tracks.iter_mut() {
-            Arc::make_mut(saved_track).track_pos += new.len();
-        }
+        // Newest first in "date added" order.  The others aren't renumbered (that
+        // copied all 4000 of them): the sort is stable, so a tie at 0 keeps the new
+        // ones on top.
         let added = new.len();
-        for (pos, mut track) in new.into_iter().enumerate().rev() {
-            Arc::make_mut(&mut track).track_pos = pos;
+        for mut track in new.into_iter().rev() {
+            Arc::make_mut(&mut track).track_pos = 0;
             saved.set.insert(track.id);
             saved.tracks.push_front(track);
         }
@@ -592,16 +591,21 @@ impl Default for Library {
     }
 }
 
-#[derive(Clone, Default, Data, Lens)]
+#[derive(Clone, Data, Lens)]
 pub struct SavedTracks {
     pub tracks: Vector<Arc<Track>>,
     pub set: HashSet<TrackId>,
+    pub loaded_at: Instant,
 }
 
 impl SavedTracks {
     pub fn new(tracks: Vector<Arc<Track>>) -> Self {
         let set = tracks.iter().map(|t| t.id).collect();
-        Self { tracks, set }
+        Self {
+            tracks,
+            set,
+            loaded_at: Instant::now(),
+        }
     }
 }
 
@@ -679,7 +683,7 @@ impl CommonCtx {
         };
         let result = serde_json::to_vec(&self.offline_playlists)
             .map_err(|err| err.to_string())
-            .and_then(|json| fs::write(path, json).map_err(|err| err.to_string()));
+            .and_then(|json| utils::write_atomic(&path, &json).map_err(|err| err.to_string()));
         if let Err(err) = result {
             log::warn!("failed to save offline playlists: {err}");
         }
@@ -780,11 +784,8 @@ mod tests {
         });
         assert_eq!(added, 2);
         let saved = state.library.saved_tracks.resolved().unwrap();
-        let order: Vec<_> = saved.tracks.iter().map(|t| (t.id, t.track_pos)).collect();
-        assert_eq!(
-            order,
-            [(track(2).id, 0), (track(3).id, 1), (track(1).id, 2)]
-        );
+        let order: Vec<_> = saved.tracks.iter().map(|t| t.id).collect();
+        assert_eq!(order, [track(2).id, track(3).id, track(1).id]);
         assert_eq!(saved.set.len(), 3);
     }
 

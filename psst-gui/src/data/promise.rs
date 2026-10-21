@@ -33,6 +33,11 @@ impl<T: Data, D: Data, E: Data> Promise<T, D, E> {
         self.state() == PromiseState::Resolved
     }
 
+    /// Never loaded, or the load failed: not while a load is under way.
+    pub fn needs_loading(&self) -> bool {
+        matches!(self.state(), PromiseState::Empty | PromiseState::Rejected)
+    }
+
     pub fn is_deferred(&self, d: &D) -> bool
     where
         D: PartialEq,

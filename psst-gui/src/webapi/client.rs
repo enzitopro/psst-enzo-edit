@@ -231,11 +231,11 @@ impl WebApi {
                 Ok(response) => response,
                 // Flaky connections get reset or time out now and then.  After a
                 // network drop every pooled socket is dead, and ureq keeps up to 3
-                // per host, so retry past them to reach a fresh one.
+                // per host, so retry past them to reach a fresh one, right away:
+                // waiting between tries only left pages loading for seconds.
                 Err(err) if is_transport_error(&err) && transport_attempts < 3 => {
                     transport_attempts += 1;
                     log::info!("request failed ({err}), retrying");
-                    thread::sleep(Duration::from_millis(500 * transport_attempts));
                     continue;
                 }
                 Err(err) => return Err(err),
@@ -485,8 +485,6 @@ impl WebApi {
         request: &RequestBuilder,
     ) -> Result<Vector<T>, Error> {
         const PAGE_SIZE: usize = 50;
-        // More made Spotify answer "too many requests" a few dozen times at startup.
-        const THREADS: usize = 2;
 
         let page = |offset: usize| -> Result<Page<T>, Error> {
             self.load(
@@ -498,19 +496,8 @@ impl WebApi {
         };
         let first = page(0)?;
         let offsets: Vec<_> = (PAGE_SIZE..first.total).step_by(PAGE_SIZE).collect();
-        let per_thread = offsets.len().div_ceil(THREADS).max(1);
-        let rest = thread::scope(|scope| {
-            let threads: Vec<_> = offsets
-                .chunks(per_thread)
-                .map(|chunk| scope.spawn(|| chunk.iter().map(|&o| page(o)).collect::<Vec<_>>()))
-                .collect();
-            threads
-                .into_iter()
-                .flat_map(|thread| thread.join().expect("page thread panicked"))
-                .collect::<Result<Vec<_>, _>>()
-        })?;
         let mut items = first.items;
-        for page in rest {
+        for page in fetch_pages(&offsets, page)? {
             items.append(page.items);
         }
         Ok(items)
@@ -904,6 +891,27 @@ impl WebApi {
 
 /// Whether a failed request didn't reach the server or got cut off, as
 /// opposed to a missing token or session, which a retry won't fix.
+/// The pages at `offsets`, in order, fetched by a couple of threads: a page at a
+/// time is slow for thousands of tracks, more threads made Spotify answer "too
+/// many requests".
+fn fetch_pages<P: Send>(
+    offsets: &[usize],
+    page: impl Fn(usize) -> Result<P, Error> + Sync,
+) -> Result<Vec<P>, Error> {
+    const THREADS: usize = 2;
+    let per_thread = offsets.len().div_ceil(THREADS).max(1);
+    thread::scope(|scope| {
+        let threads: Vec<_> = offsets
+            .chunks(per_thread)
+            .map(|chunk| scope.spawn(|| chunk.iter().map(|&o| page(o)).collect::<Vec<_>>()))
+            .collect();
+        threads
+            .into_iter()
+            .flat_map(|thread| thread.join().expect("page thread panicked"))
+            .collect()
+    })
+}
+
 fn is_transport_error(err: &Error) -> bool {
     let Error::WebApiError(message) = err;
     let message = message.to_lowercase();
@@ -1618,15 +1626,25 @@ impl WebApi {
     }
 
     // https://developer.spotify.com/documentation/web-api/reference/get-users-saved-tracks/
+    /// Every liked song, newest first, whatever the paginated limit: a liked track
+    /// missing here shows as not liked (one account has 4000 of them).
     pub fn get_saved_tracks(&self) -> Result<Vector<Arc<Track>>, Error> {
+        // The web player reads them as this playlist, through pathfinder.  The Web
+        // API needs 81 requests for 4000 of them, and after a day of that Spotify
+        // blocked the library endpoints of the user's API app for 18 hours.
+        const LIKED_SONGS: &str = "37i9dQZF1F5p3rmiWPIYgZ";
+        match self.get_pathfinder_playlist_tracks(LIKED_SONGS, true) {
+            Ok(tracks) => return Ok(tracks),
+            Err(err) => log::warn!("pathfinder refused liked songs ({err}), using Web API"),
+        }
+
         #[derive(Clone, Deserialize)]
         struct SavedTrack {
             track: Arc<Track>,
         }
-        let request =
-            &RequestBuilder::new("v1/me/tracks", Method::Get, None).query("market", "from_token");
-        // Every one, whatever the paginated limit: a liked track missing here showed
-        // as not liked (one account has 4000 of them, the limit was 500).
+        // No market: tracks keep their own IDs, as pathfinder and playlists give
+        // them, so the liked marks match.
+        let request = &RequestBuilder::new("v1/me/tracks", Method::Get, None);
         Ok(self
             .load_every_page(request)?
             .into_iter()
@@ -1891,23 +1909,29 @@ impl WebApi {
         )
     }
 
-    fn get_pathfinder_playlist_tracks(&self, id: &str) -> Result<Vector<Arc<Track>>, Error> {
+    fn get_pathfinder_playlist_tracks(
+        &self,
+        id: &str,
+        all: bool,
+    ) -> Result<Vector<Arc<Track>>, Error> {
         const PAGE_SIZE: usize = 100;
+        let limit = if all {
+            usize::MAX
+        } else {
+            self.paginated_limit
+        };
 
+        let page = |offset| self.get_pathfinder_playlist_page(id, offset, PAGE_SIZE);
+        let first = page(0)?;
+        let total = first.total_count().min(limit);
+        let offsets: Vec<_> = (PAGE_SIZE..total).step_by(PAGE_SIZE).collect();
+        let rest = fetch_pages(&offsets, page)?;
         let mut tracks = Vector::new();
-        let mut offset = 0;
-        loop {
-            let response = self.get_pathfinder_playlist_page(id, offset, PAGE_SIZE)?;
-            let total = response.total_count();
-            let page_len = response.item_count();
+        for response in std::iter::once(first).chain(rest) {
             for mut track in response.into_tracks(Some(LocalLibrary::global())) {
                 // Keeps the playlist order for sorting by "date added".
                 Arc::make_mut(&mut track).track_pos = tracks.len();
                 tracks.push_back(track);
-            }
-            offset += page_len;
-            if page_len == 0 || offset >= total || offset >= self.paginated_limit {
-                break;
             }
         }
         Ok(tracks)
@@ -1961,18 +1985,33 @@ impl WebApi {
         }
     }
 
+    /// The playlist's tracks, up to the paginated limit, for showing it.
     pub fn get_playlist_tracks(&self, id: &str) -> Result<Vector<Arc<Track>>, Error> {
-        match self.get_web_api_playlist_tracks(id) {
+        self.playlist_tracks(id, false)
+    }
+
+    /// Every track of the playlist, for downloading or liking all of it.
+    pub fn get_all_playlist_tracks(&self, id: &str) -> Result<Vector<Arc<Track>>, Error> {
+        self.playlist_tracks(id, true)
+    }
+
+    fn playlist_tracks(&self, id: &str, all: bool) -> Result<Vector<Arc<Track>>, Error> {
+        match self.get_web_api_playlist_tracks(id, all) {
             Ok(tracks) => Ok(tracks),
             Err(err) => {
                 log::info!("Web API refused playlist {id} ({err}), trying pathfinder");
-                self.get_pathfinder_playlist_tracks(id).map_err(|_| err)
+                self.get_pathfinder_playlist_tracks(id, all)
+                    .map_err(|_| err)
             }
         }
     }
 
     // https://developer.spotify.com/documentation/web-api/reference/get-playlist-items
-    fn get_web_api_playlist_tracks(&self, id: &str) -> Result<Vector<Arc<Track>>, Error> {
+    fn get_web_api_playlist_tracks(
+        &self,
+        id: &str,
+        all: bool,
+    ) -> Result<Vector<Arc<Track>>, Error> {
         #[derive(Clone, Deserialize)]
         struct PlaylistItem {
             #[serde(default)]
@@ -1991,11 +2030,16 @@ impl WebApi {
             Json(serde_json::Value),
         }
 
+        // No market (it was misspelled "marker" before, so never sent): tracks keep
+        // their own IDs, as the liked songs have them, so liked marks match.
         let request = &RequestBuilder::new(format!("v1/playlists/{id}/items"), Method::Get, None)
-            .query("marker", "from_token")
             .query("additional_types", "track");
 
-        let result: Vector<PlaylistItem> = self.load_all_pages(request)?;
+        let result: Vector<PlaylistItem> = if all {
+            self.load_every_page(request)?
+        } else {
+            self.load_all_pages(request)?
+        };
 
         let local_library = LocalLibrary::global();
 
@@ -2099,7 +2143,7 @@ impl WebApi {
             .query("q", encoded_query)
             .query("type", &type_query_param)
             .query("limit", limit.to_string())
-            .query("marker", "from_token");
+            .query("market", "from_token");
 
         let result: ApiSearchResults = self.load(request)?;
 
@@ -2168,24 +2212,13 @@ impl WebApi {
             return Ok(disk_cached_image);
         }
 
-        // Split the URI into its components
-        let uri_clone = uri.clone();
-        let parsed = url::Url::parse(&uri_clone).unwrap();
-
-        let protocol = parsed.scheme();
-        let base_uri = parsed.host_str().unwrap();
-        let path = parsed.path().trim_start_matches('/');
-
-        let mut queries = std::collections::HashMap::new();
-        for (k, v) in parsed.query_pairs() {
-            queries.insert(k.to_string(), v.to_string());
-        }
-
-        let request = RequestBuilder::new(path, Method::Get, None)
-            .set_protocol(protocol)
-            .set_base_uri(base_uri);
-
-        let response = Self::with_retry(|| self.request(&request))?;
+        // A public CDN: no Spotify token, so covers don't depend on refreshing it.
+        let response = Self::with_retry(|| {
+            self.agent
+                .get(uri.as_ref())
+                .call()
+                .map_err(|err| Error::WebApiError(err.to_string()))
+        })?;
         let mut body = Vec::new();
         response.into_body().into_reader().read_to_end(&mut body)?;
 
@@ -2245,7 +2278,6 @@ enum Method {
 // Creating a new URI builder so aid in the creation of uris with extendable queries.
 #[derive(Debug, Clone)]
 struct RequestBuilder {
-    protocol: String,
     base_uri: String,
     path: String,
     queries: HashMap<String, String>,
@@ -2261,7 +2293,6 @@ impl RequestBuilder {
     // By default, we use https and the api.spotify.com
     fn new(path: impl Display, method: Method, body: Option<serde_json::Value>) -> Self {
         Self {
-            protocol: "https".to_string(),
             base_uri: "api.spotify.com".to_string(),
             path: path.to_string(),
             queries: HashMap::new(),
@@ -2289,10 +2320,6 @@ impl RequestBuilder {
         self
     }
 
-    fn set_protocol(mut self, protocol: impl Display) -> Self {
-        self.protocol = protocol.to_string();
-        self
-    }
     fn get_headers(&self) -> &HashMap<String, String> {
         &self.headers
     }
@@ -2316,7 +2343,7 @@ impl RequestBuilder {
         self
     }
     fn build(&self) -> String {
-        let mut url = format!("{}://{}/{}", self.protocol, self.base_uri, self.path);
+        let mut url = format!("https://{}/{}", self.base_uri, self.path);
         if !self.queries.is_empty() {
             url.push('?');
             url.push_str(

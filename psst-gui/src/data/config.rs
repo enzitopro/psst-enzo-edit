@@ -1,12 +1,9 @@
 use std::{
     env::{self, VarError},
-    fs::{self, File, OpenOptions},
-    io::{BufReader, BufWriter, Write},
+    fs::{self, File},
+    io::BufReader,
     path::{Path, PathBuf},
 };
-
-#[cfg(target_family = "unix")]
-use std::os::unix::fs::OpenOptionsExt;
 
 use druid::{im::Vector, Data, Lens, Size};
 use platform_dirs::AppDirs;
@@ -241,21 +238,8 @@ impl Config {
     }
 
     fn save_to(&self, path: &Path) {
-        let mut options = OpenOptions::new();
-        options.write(true).create(true).truncate(true);
-        #[cfg(target_family = "unix")]
-        options.mode(0o600);
-
-        // Write a temporary file and swap it in, so a crash or power cut while
-        // saving never leaves a half-written config.json behind.
-        let tmp_path = path.with_extension("json.tmp");
-        let file = options.open(&tmp_path).expect("Failed to create config");
-        let mut writer = BufWriter::new(file);
-        serde_json::to_writer_pretty(&mut writer, self).expect("Failed to write config");
-        writer.flush().expect("Failed to write config");
-        writer.get_ref().sync_all().expect("Failed to write config");
-        drop(writer);
-        fs::rename(&tmp_path, path).expect("Failed to replace config");
+        let json = serde_json::to_vec_pretty(self).expect("Failed to write config");
+        super::utils::write_atomic(path, &json).expect("Failed to write config");
         log::info!("saved config: {:?}", path);
     }
 

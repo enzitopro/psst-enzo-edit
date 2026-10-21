@@ -1,6 +1,8 @@
+use std::time::Duration;
+
 use crate::{
     cmd,
-    data::{AppState, Nav, SpotifyUrl},
+    data::{AppState, Nav, PromiseState, SpotifyUrl},
     ui::{album, artist, library, lyrics, playlist, search, show},
 };
 use druid::widget::{prelude::*, Controller};
@@ -14,23 +16,32 @@ impl NavController {
             Nav::Home => {}
             Nav::Lyrics => {}
             Nav::SavedTracks => {
-                if !data.library.saved_tracks.is_resolved() {
+                // Liked on the phone meanwhile?  4000 tracks take a while, so not
+                // on every visit.
+                const REFRESH_AFTER: Duration = Duration::from_secs(10 * 60);
+                let stale = data
+                    .library
+                    .saved_tracks
+                    .resolved()
+                    .is_some_and(|saved| saved.loaded_at.elapsed() > REFRESH_AFTER);
+                if data.library.saved_tracks.needs_loading() || stale {
                     ctx.submit_command(library::LOAD_TRACKS);
                 }
             }
             Nav::SavedAlbums => {
-                if !data.library.saved_albums.is_resolved() {
+                if data.library.saved_albums.needs_loading() {
                     ctx.submit_command(library::LOAD_ALBUMS);
                 }
             }
+            // A couple of requests: refreshed on every visit.
             Nav::SavedArtists => {
-                if !data.library.followed_artists.is_resolved() {
+                if data.library.followed_artists.state() != PromiseState::Deferred {
                     ctx.submit_command(library::LOAD_ARTISTS);
                 }
             }
             Nav::ArtistSavedTracks(_) => data.refresh_artist_saved_tracks(),
             Nav::Shows => {
-                if !data.library.saved_shows.is_resolved() {
+                if data.library.saved_shows.needs_loading() {
                     ctx.submit_command(library::LOAD_SHOWS);
                 }
             }
