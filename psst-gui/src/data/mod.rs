@@ -92,6 +92,8 @@ pub struct AppState {
     pub lyrics_panel_open: bool,
     /// The queue next to the page.
     pub queue_panel_open: bool,
+    /// The main window is the mini player, on top of other windows.
+    pub mini_mode: bool,
     /// The mini player shows the lyrics under its controls.
     pub mini_lyrics_open: bool,
     /// The queue shows what played instead of what plays next.
@@ -192,6 +194,7 @@ impl AppState {
             lyrics_search: LyricsSearch::default(),
             lyrics_panel_open: false,
             queue_panel_open: false,
+            mini_mode: false,
             mini_lyrics_open: false,
             queue_shows_history: false,
             credits: None,

@@ -24,7 +24,6 @@ pub struct Delegate {
     preferences_window: Option<WindowId>,
     credits_window: Option<WindowId>,
     artwork_window: Option<WindowId>,
-    mini_player_window: Option<WindowId>,
     image_pool: ThreadPool,
     size_updated: bool,
 }
@@ -38,7 +37,6 @@ impl Delegate {
             preferences_window: None,
             credits_window: None,
             artwork_window: None,
-            mini_player_window: None,
             image_pool: ThreadPool::with_name("image_loading".into(), MAX_IMAGE_THREADS),
             size_updated: false,
         }
@@ -152,24 +150,6 @@ impl AppDelegate<AppState> for Delegate {
         data: &mut AppState,
         _env: &Env,
     ) -> Handled {
-        // The mini player's buttons act through the main window, which plays.
-        if let (Some(mini), Some(main)) = (self.mini_player_window, self.main_window) {
-            if target == Target::Window(mini) && acts_on_main_window(cmd) {
-                ctx.submit_command(cmd.clone().to(main));
-                return Handled::Yes;
-            }
-        }
-        if cmd.is(cmd::TOGGLE_MINI_PLAYER) {
-            match self.mini_player_window {
-                Some(id) => ctx.submit_command(commands::CLOSE_WINDOW.to(id)),
-                None => Self::show_or_create_window(
-                    &mut self.mini_player_window,
-                    ui::mini_player_window,
-                    ctx,
-                ),
-            }
-            return Handled::Yes;
-        }
         if cmd.is(cmd::SHOW_CREDITS_WINDOW) {
             let _window_id = self.show_credits(ctx);
             if let Some(track) = cmd.get(cmd::SHOW_CREDITS_WINDOW) {
@@ -288,9 +268,6 @@ impl AppDelegate<AppState> for Delegate {
         if self.artwork_window == Some(id) {
             self.artwork_window = None;
         }
-        if self.mini_player_window == Some(id) {
-            self.mini_player_window = None;
-        }
     }
 
     fn event(
@@ -305,7 +282,8 @@ impl AppDelegate<AppState> for Delegate {
             if let Event::WindowSize(size) = event {
                 if !self.size_updated {
                     self.size_updated = true;
-                } else {
+                } else if !data.mini_mode {
+                    // The full size, to go back to from the mini player.
                     data.config.window_size = size;
                 }
             }
@@ -332,27 +310,6 @@ impl AppDelegate<AppState> for Delegate {
         }
         Some(event)
     }
-}
-
-/// What the mini player's buttons and menus ask, which the main window does.
-fn acts_on_main_window(cmd: &Command) -> bool {
-    cmd.is(cmd::PLAY_PAUSE)
-        || cmd.is(cmd::PLAY_RESUME)
-        || cmd.is(cmd::PLAY_PREVIOUS)
-        || cmd.is(cmd::PLAY_NEXT)
-        || cmd.is(cmd::PLAY_SEEK)
-        || cmd.is(cmd::SKIP_TO_POSITION)
-        || cmd.is(cmd::PLAY_QUEUE_BEHAVIOR)
-        || cmd.is(cmd::NAVIGATE)
-        || cmd.is(cmd::TOGGLE_LYRICS)
-        || cmd.is(cmd::TOGGLE_QUEUE)
-        || cmd.is(cmd::ADD_TO_QUEUE)
-        || cmd.is(cmd::HIDE_TRACK)
-        || cmd.is(cmd::UNHIDE_TRACK)
-        || cmd.is(ui::library::SAVE_TRACK)
-        || cmd.is(ui::library::UNSAVE_TRACK)
-        || cmd.is(ui::playlist::ADD_TRACK)
-        || cmd.is(ui::playlist::REMOVE_TRACK)
 }
 
 /// Ctrl+F finds in the open list, Ctrl+L goes to the search box and Ctrl+1–5

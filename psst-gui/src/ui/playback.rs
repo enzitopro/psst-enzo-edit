@@ -43,8 +43,8 @@ pub fn panel_widget() -> impl Widget<AppState> {
         })
 }
 
-/// The playback bar alone, in a small window that stays on top, and the lyrics
-/// under it on demand.  Its buttons act through the main window, which plays.
+/// The playback bar alone, for the window as a mini player, and the lyrics
+/// under it on demand.
 pub fn mini_player_widget() -> impl Widget<AppState> {
     const WIDTH: f64 = theme::GRID * 60.0;
     let seek_bar = Maybe::or_empty(SeekBar::new).lens(Playback::now_playing);

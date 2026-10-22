@@ -40,7 +40,7 @@ pub const NAVIGATE_REFRESH: Selector = Selector::new("app.navigate-refresh");
 /// Loads the page again, cached parts included, and whatever else failed.
 pub const RELOAD: Selector = Selector::new("app.reload");
 pub const TOGGLE_LYRICS: Selector = Selector::new("app.toggle-lyrics");
-/// Opens or closes the small playback window that stays on top.
+/// Turns the main window into the small player that stays on top, and back.
 pub const TOGGLE_MINI_PLAYER: Selector = Selector::new("app.toggle-mini-player");
 /// Shows or hides the small lyrics panel over the main window.
 pub const TOGGLE_LYRICS_WINDOW: Selector = Selector::new("app.toggle-lyrics-window");

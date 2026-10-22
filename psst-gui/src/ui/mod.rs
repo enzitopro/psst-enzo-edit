@@ -54,10 +54,15 @@ pub mod utils;
 
 pub const DOWNLOAD_ARTWORK: Selector<(String, String)> = Selector::new("app.artwork.download");
 
+/// The window turned into the mini player.
+const MINI_PLAYER_SIZE: (f64, f64) = (theme::GRID * 60.0, theme::GRID * 22.0);
+
 pub fn main_window(config: &Config) -> WindowDesc<AppState> {
     WindowDesc::new(root_widget())
         .title(compute_main_window_title)
-        .with_min_size((theme::grid(65.0), theme::grid(50.0)))
+        // shortcut: as small as the mini player, so the full layout can be shrunk
+        // that far too; druid sets the minimum only when the window opens.
+        .with_min_size(MINI_PLAYER_SIZE)
         .window_size(config.window_size)
         .show_title(false)
         .transparent_titlebar(true)
@@ -91,17 +96,6 @@ pub fn account_setup_window() -> WindowDesc<AppState> {
         .resizable(true)
         .show_title(false)
         .transparent_titlebar(true)
-}
-
-/// The playback bar in a small window that stays on top.
-pub fn mini_player_window() -> WindowDesc<AppState> {
-    let widget = ThemeScope::new(playback::mini_player_widget().background(theme::BACKGROUND_DARK));
-    WindowDesc::new(widget)
-        .title("Psst")
-        .window_size((theme::grid(60.0), theme::grid(22.0)))
-        .with_min_size((theme::grid(40.0), theme::grid(18.0)))
-        .resizable(true)
-        .set_always_on_top(true)
 }
 
 pub fn artwork_window() -> WindowDesc<AppState> {
@@ -266,7 +260,24 @@ fn root_widget() -> impl Widget<AppState> {
         .min_bar_area(1.0)
         .solid_bar(true);
 
-    let root = ThemeScope::new(split)
+    // The player is in the full layout, which still gets the commands while the
+    // mini player shows.
+    let layout = Either::new(
+        |data: &AppState, _| data.mini_mode,
+        playback::mini_player_widget(),
+        split,
+    )
+    .on_command(cmd::TOGGLE_MINI_PLAYER, |ctx, _, data: &mut AppState| {
+        data.mini_mode = !data.mini_mode;
+        let window = ctx.window();
+        window.set_always_on_top(data.mini_mode);
+        window.set_size(if data.mini_mode {
+            MINI_PLAYER_SIZE.into()
+        } else {
+            data.config.window_size
+        });
+    });
+    let root = ThemeScope::new(layout)
         .controller(SessionController)
         .controller(NavController)
         .controller(SortController)
