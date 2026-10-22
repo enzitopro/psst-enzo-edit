@@ -27,6 +27,28 @@ pub struct Playback {
     pub volume: f64,
 }
 
+impl Playback {
+    /// Moves what played into `history` as `next` starts, unless it's the same
+    /// item again (repeat one).
+    pub fn remember_played(&mut self, next: &Playable) {
+        const MAX_HISTORY: usize = 50;
+        let Some(played) = &self.now_playing else {
+            return;
+        };
+        if played.item.id() == next.id() {
+            return;
+        }
+        self.history.push_front(QueueEntry {
+            item: played.item.clone(),
+            origin: played.origin.clone(),
+        });
+        // `truncate` past the end panics.
+        if self.history.len() > MAX_HISTORY {
+            self.history.truncate(MAX_HISTORY);
+        }
+    }
+}
+
 /// A change to what plays next, by position in `Playback::upcoming`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum QueueEdit {

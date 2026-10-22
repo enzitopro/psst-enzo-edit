@@ -67,7 +67,11 @@ fn shown(
     list: fn(&Playback) -> &Vector<QueueEntry>,
 ) -> impl Lens<AppState, WithCtx<Vector<QueueEntry>>> {
     let rows = AppState::playback.map(
-        move |playback: &Playback| list(playback).take(SHOWN),
+        move |playback: &Playback| {
+            // `take` past the end panics.
+            let list = list(playback);
+            list.take(SHOWN.min(list.len()))
+        },
         |_, _| {},
     );
     Ctx::make(AppState::common_ctx, rows)
@@ -128,4 +132,64 @@ fn placeholder<T: druid::Data>(text: &str) -> impl Widget<T> {
         .with_text_size(theme::TEXT_SIZE_SMALL)
         .with_text_color(theme::PLACEHOLDER_COLOR)
         .padding(theme::grid(1.0))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{sync::Arc, time::Duration};
+
+    use psst_core::item_id::{ItemId, ItemIdType};
+
+    use super::*;
+    use crate::{
+        data::{Config, PlaybackOrigin, TrackId},
+        webapi::local_library::{local_track, LocalItem},
+    };
+
+    fn entry(n: usize) -> QueueEntry {
+        let item = LocalItem {
+            title: n.to_string(),
+            artists: vec![],
+            album: String::new(),
+            duration_ms: None,
+        };
+        let mut track = local_track(&item, None, 1, 1);
+        track.id = TrackId(ItemId::new(n as u128 + 1, ItemIdType::Track));
+        QueueEntry {
+            item: Playable::Track(Arc::new(track)),
+            origin: PlaybackOrigin::Library,
+        }
+    }
+
+    #[test]
+    fn shows_the_first_rows_of_short_and_long_lists() {
+        let mut state = AppState::default_with_config(Config::default());
+        let rows = shown(|playback| &playback.upcoming);
+        assert!(rows.get(&state).data.is_empty());
+        state.playback.upcoming = (0..3).map(entry).collect();
+        assert_eq!(rows.get(&state).data.len(), 3);
+        state.playback.upcoming = (0..150).map(entry).collect();
+        assert_eq!(rows.get(&state).data.len(), SHOWN);
+    }
+
+    #[test]
+    fn remembers_what_played_newest_first() {
+        let mut state = AppState::default_with_config(Config::default());
+        let play = |state: &mut AppState, n| {
+            let next = entry(n);
+            state.playback.remember_played(&next.item);
+            state.start_playback(next.item, next.origin, Duration::ZERO);
+        };
+        play(&mut state, 0);
+        assert!(state.playback.history.is_empty());
+        play(&mut state, 1);
+        play(&mut state, 1);
+        assert_eq!(state.playback.history.len(), 1);
+        for n in 2..80 {
+            play(&mut state, n);
+        }
+        assert_eq!(state.playback.history.len(), 50);
+        let newest = &state.playback.history[0].item;
+        assert_eq!(&*newest.track().unwrap().name, "78");
+    }
 }

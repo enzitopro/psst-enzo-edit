@@ -40,9 +40,6 @@ use crate::{
     webapi::WebApi,
 };
 
-/// How many played tracks the queue shows.
-const MAX_HISTORY: usize = 50;
-
 /// Loads the queue of the last session, paused where it was.
 const RESTORE_PLAYBACK: Selector = Selector::new("app.playback.restore");
 
@@ -562,16 +559,7 @@ where
                 self.report_now_playing(&data.playback);
 
                 if let Some(queued) = data.queued_entry(*item) {
-                    if let Some(previous) = data.playback.now_playing.as_ref() {
-                        if previous.item.id() != queued.item.id() {
-                            let played = QueueEntry {
-                                item: previous.item.clone(),
-                                origin: previous.origin.clone(),
-                            };
-                            data.playback.history.push_front(played);
-                            data.playback.history.truncate(MAX_HISTORY);
-                        }
-                    }
+                    data.playback.remember_played(&queued.item);
                     data.start_playback(queued.item, queued.origin, progress.to_owned());
                     self.update_media_control_playback(&data.playback);
                     self.update_media_control_metadata(&data.playback);
