@@ -688,7 +688,7 @@ impl CommonCtx {
             })
     }
 
-    // In the cache, so Clear Cache forgets them together with the downloads.
+    // Next to the downloads: Clear Cache keeps it, Delete Downloads removes it.
     fn offline_playlists_path() -> Option<PathBuf> {
         Config::cache_dir().map(|dir| dir.join("offline-playlists.json"))
     }

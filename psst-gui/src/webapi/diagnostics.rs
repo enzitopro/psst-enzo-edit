@@ -564,7 +564,7 @@ fn diagnostics_download_for_offline() {
     assert_eq!((downloaded, failed, reported), (items.len(), 0, items.len()));
 
     // The startup scan finds them.
-    let found = psst_core::player::item::downloaded_tracks(&cache, &config.playback());
+    let found = psst_core::player::item::downloaded_tracks(&cache, &config.playback(), &[]);
     assert!(items.iter().all(|item| found.contains(&item.item_id)));
 
     // No session config: any network access fails, so these must come from the cache.

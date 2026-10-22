@@ -26,6 +26,7 @@ use psst_core::{connection::Credentials, lastfm, oauth, session::SessionConfig};
 use super::{icons::SvgIcon, theme};
 
 const CLEAR_CACHE: Selector = Selector::new("app.preferences.clear-cache");
+const DELETE_DOWNLOADS: Selector = Selector::new("app.preferences.delete-downloads");
 
 // Helper function for creating a labeled input row
 fn make_input_row<L>(
@@ -435,7 +436,7 @@ struct CacheController {
 }
 
 impl CacheController {
-    const RESULT: Selector<Option<u64>> = Selector::new("app.preferences.measure-cache-size");
+    const RESULT: Selector<Option<(u64, u64)>> = Selector::new("app.preferences.measure-cache-size");
 
     fn new() -> Self {
         Self { thread: None }
@@ -469,6 +470,16 @@ impl<W: Widget<Preferences>> Controller<Preferences, W> for CacheController {
                         log::error!("Failed to clear cache: {err}");
                     } else {
                         // After clearing, re-measure the cache size.
+                        self.start_measuring(ctx.get_external_handle(), ctx.widget_id());
+                    }
+                }
+                ctx.set_handled();
+            }
+            Event::Command(cmd) if cmd.is(DELETE_DOWNLOADS) => {
+                if let Some(cache) = &data.cache {
+                    if let Err(err) = cache.clear_downloads() {
+                        log::error!("Failed to delete downloads: {err}");
+                    } else {
                         self.start_measuring(ctx.get_external_handle(), ctx.widget_id());
                         ctx.submit_command(cmd::DOWNLOADS_CLEARED.to(Target::Global));
                     }
@@ -1108,29 +1119,44 @@ fn cache_tab_widget() -> impl Widget<AppState> {
 
     col = col.with_spacer(theme::grid(3.0));
 
+    // The cache trims itself, the downloads stay until deleted.
+    let size = |show: fn((u64, u64)) -> String| {
+        Label::dynamic(move |preferences: &Preferences, _| match preferences.cache_size {
+            Promise::Empty | Promise::Rejected { .. } => "Unknown".to_string(),
+            Promise::Deferred { .. } => "Computing...".to_string(),
+            Promise::Resolved { val, .. } => show(val),
+        })
+    };
     col = col
-        .with_child(Label::new("Size").with_font(theme::UI_FONT_MEDIUM))
+        .with_child(Label::new("Cache").with_font(theme::UI_FONT_MEDIUM))
         .with_spacer(theme::grid(2.0))
-        .with_child(Label::dynamic(
-            |preferences: &Preferences, _| match preferences.cache_size {
-                Promise::Empty | Promise::Rejected { .. } => "Unknown".to_string(),
-                Promise::Deferred { .. } => "Computing...".to_string(),
-                Promise::Resolved { val: 0, .. } => "Empty".to_string(),
-                Promise::Resolved { val, .. } => {
-                    format!("{:.2} MB", val as f64 / 1e6_f64)
-                }
-            },
-        ));
-
-    // Clear cache button
-    col = col
+        .with_child(size(|(cache, _)| {
+            let limit = as_size(psst_core::cache::AUDIO_CACHE_LIMIT);
+            format!("{} of {limit}", as_size(cache))
+        }))
         .with_spacer(theme::grid(2.0))
         .with_child(Button::new("Clear Cache").on_left_click(|ctx, _, _, _| {
             ctx.submit_command(CLEAR_CACHE);
+        }))
+        .with_spacer(theme::grid(3.0))
+        .with_child(Label::new("Downloads").with_font(theme::UI_FONT_MEDIUM))
+        .with_spacer(theme::grid(2.0))
+        .with_child(size(|(_, downloads)| as_size(downloads)))
+        .with_spacer(theme::grid(2.0))
+        .with_child(Button::new("Delete Downloads").on_left_click(|ctx, _, _, _| {
+            ctx.submit_command(DELETE_DOWNLOADS);
         }));
 
     col.controller(CacheController::new())
         .lens(AppState::preferences)
+}
+
+fn as_size(bytes: u64) -> String {
+    match bytes {
+        0 => "Empty".to_string(),
+        bytes if bytes >= 1_000_000_000 => format!("{:.2} GB", bytes as f64 / 1e9),
+        bytes => format!("{:.2} MB", bytes as f64 / 1e6),
+    }
 }
 
 fn about_tab_widget() -> impl Widget<AppState> {

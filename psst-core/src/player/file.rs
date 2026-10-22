@@ -119,8 +119,13 @@ impl MediaFile {
     }
 
     pub fn open(path: MediaPath, cdn: CdnHandle, cache: CacheHandle) -> Result<Self, Error> {
+        let downloaded_path = cache.download_file_path(path.file_id);
         let cached_path = cache.audio_file_path(path.file_id);
-        if cached_path.exists() {
+        if downloaded_path.exists() {
+            let cached_file = CachedFile::open(path, downloaded_path)?;
+            Ok(Self::Cached { cached_file })
+        } else if cached_path.exists() {
+            cache.touch_audio_file(path.file_id);
             let cached_file = CachedFile::open(path, cached_path)?;
             Ok(Self::Cached { cached_file })
         } else {
@@ -140,17 +145,17 @@ impl MediaFile {
         }
     }
 
-    /// Downloads the whole (still encrypted) file into the cache, so it plays without
-    /// a connection.  Goes through a temporary file, so a failed download never leaves
-    /// a truncated file that would be played as complete.
+    /// Downloads the whole (still encrypted) file into the downloads, so it plays
+    /// without a connection.  Goes through a temporary file, so a failed download
+    /// never leaves a truncated file that would be played as complete.
     pub fn download(path: MediaPath, cdn: &CdnHandle, cache: &CacheHandle) -> Result<(), Error> {
         // Small requests, so each one fits the HTTP client's 5s timeout on a slow link.
         const CHUNK_LENGTH: u64 = 512 * 1024;
 
-        let cached_path = cache.audio_file_path(path.file_id);
-        if cached_path.exists() {
+        if cache.adopt_download(path.file_id) {
             return Ok(());
         }
+        let cached_path = cache.download_file_path(path.file_id);
         let url = cdn.resolve_audio_file_url(path.file_id)?;
         let mut file =
             NamedTempFile::new_in(cached_path.parent().expect("cache files are in a folder"))?;
@@ -293,7 +298,10 @@ impl StreamedFile {
                     match load_range(&mut writer, &cdn, &url, offset, length) {
                         Ok(_) => {
                             // If the file is completely downloaded, copy it to cache.
-                            if writer.is_complete() && !cache.audio_file_path(file_id).exists() {
+                            if writer.is_complete()
+                                && !cache.audio_file_path(file_id).exists()
+                                && !cache.download_file_path(file_id).exists()
+                            {
                                 // TODO: We should do this atomically.
                                 if let Err(err) = cache.save_audio_file(file_id, file_path) {
                                     log::warn!("failed to save audio file to cache: {err:?}");

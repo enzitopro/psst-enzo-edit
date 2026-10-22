@@ -275,13 +275,6 @@ impl Player {
                     path.duration
                 );
             }
-            // Streamed to the end, so it now plays without a connection.
-            if self.cache.audio_file_path(path.file_id).exists() {
-                let _ = self.sender.send(PlayerEvent::ItemDownloaded {
-                    item_id: path.item_id,
-                    ok: true,
-                });
-            }
         }
         self.queue.skip_to_following();
         if let Some(&item) = self.queue.get_current() {
@@ -650,8 +643,8 @@ pub enum PlayerEvent {
         item: PlaybackItem,
         error: String,
     },
-    /// An item of a `Download` command is in the cache, or failed to download.
-    /// Also sent when a streamed track ends and is now in the cache.
+    /// An item of a `Download` command is in the downloads, or failed to
+    /// download.
     ItemDownloaded {
         item_id: ItemId,
         ok: bool,

@@ -27,7 +27,8 @@ pub struct Preferences {
     pub active: PreferencesTab,
     #[data(ignore)]
     pub cache: Option<CacheHandle>,
-    pub cache_size: Promise<u64, (), ()>,
+    /// The cache, and the downloads apart from it.
+    pub cache_size: Promise<(u64, u64), (), ()>,
     pub auth: Authentication,
     pub lastfm_auth_result: Option<String>,
     pub local_files: LocalFilesStatus,
@@ -55,8 +56,10 @@ impl Preferences {
         self.auth.lastfm_api_secret_input.clear();
     }
 
-    pub fn measure_cache_usage() -> Option<u64> {
-        Config::cache_dir().and_then(|path| get_dir_size(&path))
+    pub fn measure_cache_usage() -> Option<(u64, u64)> {
+        let dir = Config::cache_dir()?;
+        let downloads = get_dir_size(&dir.join("downloads")).unwrap_or(0);
+        Some((get_dir_size(&dir)?.saturating_sub(downloads), downloads))
     }
 }
 

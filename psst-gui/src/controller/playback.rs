@@ -31,7 +31,7 @@ use crate::{
     cmd,
     data::Nav,
     data::{
-        AppState, Config, NowPlaying, Playable, Playback, PlaybackOrigin, PlaybackState,
+        AppState, CommonCtx, Config, NowPlaying, Playable, Playback, PlaybackOrigin, PlaybackState,
         QueueBehavior, QueueEdit, QueueEntry, SavedPlayback, Track, TrackId,
     },
     discord::{DiscordPresence, Presence},
@@ -108,7 +108,12 @@ impl PlaybackController {
         thread::spawn({
             let (cache, config, event_sink) = (cache.clone(), config.clone(), event_sink.clone());
             move || {
-                let tracks: Vec<_> = downloaded_tracks(&cache, &config)
+                // Downloaded playlists, from before downloads had their own folder.
+                let adopt: Vec<_> = CommonCtx::load_offline_playlists()
+                    .values()
+                    .flat_map(|(_, tracks)| tracks.iter().map(|id| id.0))
+                    .collect();
+                let tracks: Vec<_> = downloaded_tracks(&cache, &config, &adopt)
                     .into_iter()
                     .map(TrackId)
                     .collect();
@@ -657,7 +662,9 @@ where
                 ctx.set_handled();
             }
             Event::Command(cmd) if cmd.is(cmd::DOWNLOADS_CLEARED) => {
-                data.common_ctx_mut().downloaded.clear();
+                let common = data.common_ctx_mut();
+                common.downloaded.clear();
+                common.offline_playlists.clear();
                 ctx.set_handled();
             }
             Event::Command(cmd) if cmd.is(cmd::DOWNLOADING_TRACKS) => {
