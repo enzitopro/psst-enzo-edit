@@ -396,11 +396,24 @@ fn download_status_widget() -> impl Widget<AppState> {
         Flex::column()
             .cross_axis_alignment(CrossAxisAlignment::Start)
             .with_child(
-                Label::dynamic(|data: &AppState, _| {
-                    let current = data.download_total - data.download_queue.len() + 1;
-                    format!("Downloading {current} of {}", data.download_total)
-                })
-                .with_text_size(theme::TEXT_SIZE_SMALL),
+                Flex::row()
+                    .with_child(
+                        Label::dynamic(|data: &AppState, _| {
+                            let current = data.download_total - data.download_queue.len() + 1;
+                            format!("Downloading {current} of {}", data.download_total)
+                        })
+                        .with_text_size(theme::TEXT_SIZE_SMALL),
+                    )
+                    .with_flex_spacer(1.0)
+                    .with_child(
+                        Label::new("Stop")
+                            .with_text_size(theme::TEXT_SIZE_SMALL)
+                            .link()
+                            .on_left_click(|ctx, _, _, _| {
+                                ctx.submit_command(cmd::CANCEL_DOWNLOADS)
+                            }),
+                    )
+                    .must_fill_main_axis(true),
             )
             .with_child(
                 Label::dynamic(|data: &AppState, _| {

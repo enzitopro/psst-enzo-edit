@@ -4,7 +4,16 @@ pub mod queue;
 mod storage;
 mod worker;
 
-use std::{mem, thread, thread::JoinHandle, time::Duration};
+use std::{
+    mem,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+    thread,
+    thread::JoinHandle,
+    time::Duration,
+};
 
 use crossbeam_channel::{unbounded, Receiver, Sender};
 
@@ -60,6 +69,8 @@ pub struct Player {
     retried_item: Option<PlaybackItem>,
     /// Where the next track to play starts, paused: the last session, restored.
     start_paused_at: Option<Duration>,
+    /// Bumped to stop the downloads running.
+    download_generation: Arc<AtomicUsize>,
 }
 
 impl Player {
@@ -86,6 +97,7 @@ impl Player {
             consecutive_loading_failures: 0,
             retried_item: None,
             start_paused_at: None,
+            download_generation: Arc::default(),
         }
     }
 
@@ -124,6 +136,7 @@ impl Player {
             cmd,
             PlayerCommand::Preload { .. }
                 | PlayerCommand::Download { .. }
+                | PlayerCommand::CancelDownloads
                 | PlayerCommand::Configure { .. }
                 | PlayerCommand::SetQueueBehavior { .. }
                 | PlayerCommand::AddToQueue { .. }
@@ -146,6 +159,9 @@ impl Player {
             PlayerCommand::LoadAndPlay { item } => self.load_and_play(item),
             PlayerCommand::Preload { item } => self.preload(item),
             PlayerCommand::Download { items } => self.download(items),
+            PlayerCommand::CancelDownloads => {
+                self.download_generation.fetch_add(1, Ordering::SeqCst);
+            }
             PlayerCommand::Pause => self.pause(),
             PlayerCommand::Resume => self.resume(),
             PlayerCommand::PauseOrResume => self.pause_or_resume(),
@@ -295,7 +311,12 @@ impl Player {
 
     /// Tells what plays next, for showing the queue.
     fn report_upcoming(&self) {
-        let upcoming = self.queue.upcoming().iter().map(|item| item.item_id).collect();
+        let upcoming = self
+            .queue
+            .upcoming()
+            .iter()
+            .map(|item| item.item_id)
+            .collect();
         let _ = self.sender.send(PlayerEvent::Upcoming { items: upcoming });
     }
 
@@ -363,6 +384,8 @@ impl Player {
         let cdn = self.cdn.clone();
         let cache = self.cache.clone();
         let config = self.config.clone();
+        let generation = Arc::clone(&self.download_generation);
+        let started = generation.load(Ordering::SeqCst);
         thread::spawn(move || {
             download_items(
                 &items,
@@ -371,6 +394,7 @@ impl Player {
                 |event| {
                     let _ = sender.send(event);
                 },
+                || generation.load(Ordering::SeqCst) != started,
             );
         });
     }
@@ -524,6 +548,7 @@ fn download_items(
     mut download: impl FnMut(&PlaybackItem) -> Result<(), Error>,
     mut sleep: impl FnMut(Duration),
     mut send: impl FnMut(PlayerEvent),
+    cancelled: impl Fn() -> bool,
 ) {
     const ATTEMPTS: usize = 3;
     const RETRY_AFTER: Duration = Duration::from_secs(5);
@@ -537,6 +562,11 @@ fn download_items(
     for item in items {
         let mut attempt = 1;
         let ok = loop {
+            // Checked after each wait too, they last minutes.
+            if cancelled() {
+                log::info!("downloads cancelled");
+                return;
+            }
             match download(item) {
                 Ok(()) => {
                     key_waits = KEY_WAITS_SECS.iter();
@@ -598,6 +628,8 @@ pub enum PlayerCommand {
     Download {
         items: Vec<PlaybackItem>,
     },
+    /// Stops the downloads after the item each is on, without more events.
+    CancelDownloads,
     Pause,
     Resume,
     PauseOrResume,
@@ -771,6 +803,7 @@ mod tests {
             |_| results.pop_front().unwrap(),
             |wait| sleeps.push(wait.as_secs()),
             |event| events.push(event),
+            || false,
         );
 
         assert!(results.is_empty());
@@ -789,6 +822,34 @@ mod tests {
                 downloaded: 2,
                 failed: 3
             })
+        ));
+    }
+
+    #[test]
+    fn cancelled_downloads_stop_without_finishing() {
+        let items: Vec<_> = (1..=3)
+            .map(|id| PlaybackItem {
+                item_id: ItemId::new(id, ItemIdType::Track),
+                norm_level: NormalizationLevel::None,
+            })
+            .collect();
+        let downloads = std::cell::Cell::new(0);
+        let mut events = Vec::new();
+        download_items(
+            &items,
+            |_| {
+                downloads.set(downloads.get() + 1);
+                Ok(())
+            },
+            |_| {},
+            |event| events.push(event),
+            || downloads.get() == 1,
+        );
+        assert_eq!(downloads.get(), 1);
+        // No `Downloaded`: the app already knows it stopped them.
+        assert!(matches!(
+            events[..],
+            [PlayerEvent::ItemDownloaded { ok: true, .. }]
         ));
     }
 }

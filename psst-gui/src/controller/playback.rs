@@ -699,6 +699,12 @@ where
                 common.save_offline_playlists();
                 ctx.set_handled();
             }
+            Event::Command(cmd) if cmd.is(cmd::CANCEL_DOWNLOADS) => {
+                self.send(PlayerEvent::Command(PlayerCommand::CancelDownloads));
+                data.cancel_downloads();
+                data.info_alert("Stopped downloading, download again to go on");
+                ctx.set_handled();
+            }
             Event::Command(cmd) if cmd.is(cmd::DOWNLOADS_CLEARED) => {
                 let common = data.common_ctx_mut();
                 common.downloaded.clear();

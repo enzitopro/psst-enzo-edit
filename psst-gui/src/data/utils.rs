@@ -86,7 +86,6 @@ impl Image {
     }
 }
 
-
 pub fn default_str() -> Arc<str> {
     "".into()
 }

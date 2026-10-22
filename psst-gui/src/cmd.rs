@@ -79,6 +79,8 @@ pub const OFFLINE_PLAYLIST: Selector<(Arc<str>, usize, Vector<TrackId>)> =
     Selector::new("app.offline-playlist");
 /// Clear Cache deleted the downloads too.
 pub const DOWNLOADS_CLEARED: Selector = Selector::new("app.downloads-cleared");
+/// Stops the downloads running; what's downloaded stays.
+pub const CANCEL_DOWNLOADS: Selector = Selector::new("app.cancel-downloads");
 /// Spotify is refusing audio keys, downloads continue after this wait.
 pub const DOWNLOAD_PAUSED: Selector<Duration> = Selector::new("app.download-paused");
 /// Tracks saved and tracks that failed, or why the download couldn't start.

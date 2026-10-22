@@ -393,6 +393,13 @@ impl AppState {
     }
 
     /// A track is in the cache now (downloaded or streamed), or failed to download.
+    /// Forgets the downloads still to do, the player stops them.
+    pub fn cancel_downloads(&mut self) {
+        self.common_ctx_mut().downloading.clear();
+        self.download_queue.clear();
+        self.download_total = 0;
+    }
+
     pub fn finish_download(&mut self, id: TrackId, ok: bool) {
         let common = self.common_ctx_mut();
         common.downloading.remove(&id);
@@ -966,6 +973,15 @@ mod tests {
         assert_eq!(state.download_total, 2);
         state.finish_download(b.id, false);
         assert_eq!((state.download_queue.len(), state.download_total), (0, 0));
+
+        // Stopped halfway, nothing shows as downloading any more.
+        let (d, e) = (track(4), track(5));
+        state.queue_downloads(&[d.clone(), e].into_iter().collect());
+        state.finish_download(d.id, true);
+        state.cancel_downloads();
+        assert_eq!((state.download_queue.len(), state.download_total), (0, 0));
+        assert!(state.common_ctx.downloading.is_empty());
+        assert!(state.common_ctx.downloaded.contains(&d.id));
         assert!(state.common_ctx.downloaded.contains(&a.id));
         assert!(!state.common_ctx.downloaded.contains(&b.id));
         assert!(state.common_ctx.downloading.is_empty());
