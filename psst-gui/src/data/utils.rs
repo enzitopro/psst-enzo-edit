@@ -73,14 +73,19 @@ impl Image {
         }
     }
 
+    /// The smallest image covering `width` × `height`, else the largest one.
+    /// The order doesn't matter: pathfinder lists 300, 64, 640, and taking the
+    /// first that covers decoded 640 px covers for 48 px rows, ~1.6 MB each.
     pub fn at_least_of_size(images: &Vector<Self>, width: f64, height: f64) -> Option<&Self> {
+        let area = |img: &&Self| img.width.unwrap_or(0) * img.height.unwrap_or(0);
         images
             .iter()
-            .rev()
-            .find(|img| !img.fits(width, height))
-            .or_else(|| images.back())
+            .filter(|img| !img.fits(width, height))
+            .min_by_key(area)
+            .or_else(|| images.iter().max_by_key(area))
     }
 }
+
 
 pub fn default_str() -> Arc<str> {
     "".into()
@@ -180,4 +185,33 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
     file.sync_all()?;
     drop(file);
     fs::rename(&tmp_path, path)
+}
+
+#[cfg(test)]
+mod image_tests {
+    use super::*;
+
+    fn image(size: Option<usize>) -> Image {
+        Image {
+            url: format!("{size:?}").into(),
+            width: size,
+            height: size,
+        }
+    }
+
+    #[test]
+    fn picks_the_smallest_cover_that_is_big_enough() {
+        let images: Vector<_> = [Some(300), Some(64), Some(640)]
+            .map(image)
+            .into_iter()
+            .collect();
+        let picked = |size| Image::at_least_of_size(&images, size, size).unwrap().width;
+        assert_eq!(picked(48.0), Some(64));
+        assert_eq!(picked(128.0), Some(300));
+        assert_eq!(picked(400.0), Some(640));
+        assert_eq!(picked(1000.0), Some(640));
+        // A playlist mosaic has one image of unknown size.
+        let mosaic: Vector<_> = [image(None)].into_iter().collect();
+        assert!(Image::at_least_of_size(&mosaic, 48.0, 48.0).is_some());
+    }
 }
