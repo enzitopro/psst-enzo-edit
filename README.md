@@ -1,185 +1,90 @@
-# Psst
+# Psst (Windows fork)
 
-A fast Spotify client with a native GUI written in Rust, without Electron.
-Psst is still very early in development, lacking in features, stability, and general user experience.
-It's fully cross-platform, supporting Windows, Linux, and macOS.
-Contributions are welcome!
+A personal fork of [Psst](https://github.com/jpochyla/psst), the fast Spotify client with a native GUI written in Rust, without Electron.
+This fork only targets **Windows**, and adds offline downloads, a queue, Discord and Last.fm integration, lyrics and many fixes for daily use.
 
 **Note:** A Spotify Premium account is required.
 
-> **ℹ️ As of February 2026, Spotify [changed developer access](https://developer.spotify.com/blog/2026-02-06-update-on-developer-access-and-platform-security), and Psst now requires your own Spotify Developer Client ID for Web API features (search, library, playlists).** Register an app at the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard) (redirect URI: `http://127.0.0.1:8888/login` and enable Web API), then enter its Client ID on Psst's sign-in screen.
-
-[![Build](https://github.com/jpochyla/psst/actions/workflows/build.yml/badge.svg)](https://github.com/jpochyla/psst/actions)
+> **ℹ️ Since February 2026, Spotify [requires your own Developer Client ID](https://developer.spotify.com/blog/2026-02-06-update-on-developer-access-and-platform-security) for Web API features.** Register an app at the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard) (redirect URI: `http://127.0.0.1:8888/login`, with the Web API enabled), then enter its Client ID on Psst's sign-in screen.
 
 ![Screenshot](./psst-gui/assets/screenshot.png)
 
-## Download
+## Features
 
-GitHub Actions automatically builds and releases new versions when changes are pushed to the `main` branch.
-You can download the latest release for Windows, Linux, and macOS from the [GitHub Releases page](https://github.com/jpochyla/psst/releases/latest).
+### Library
 
-| Platform               | Download Link                                                                            |
-| ---------------------- | ---------------------------------------------------------------------------------------- |
-| Linux (x86_64)         | [Download](https://github.com/jpochyla/psst/releases/latest/download/psst-linux-x86_64)  |
-| Linux (aarch64)        | [Download](https://github.com/jpochyla/psst/releases/latest/download/psst-linux-aarch64) |
-| Debian Package (amd64) | [Download](https://github.com/jpochyla/psst/releases/latest/download/psst-amd64.deb)     |
-| Debian Package (arm64) | [Download](https://github.com/jpochyla/psst/releases/latest/download/psst-arm64.deb)     |
-| macOS                  | [Download](https://github.com/jpochyla/psst/releases/latest/download/Psst.dmg)           |
-| Windows                | [Download](https://github.com/jpochyla/psst/releases/latest/download/Psst.exe)           |
+- **All your liked songs**, thousands of them, read like the web player does, so the Web API's rate limits don't get in the way.
+- **Artists** page with the artists you follow, as a list or a grid; each opens the songs you saved from them.
+- **Sorting** that each list keeps on its own (every playlist, Liked Songs, every artist), and the sidebar's playlists sorted like Spotify's library: Recents, Recently Added, Alphabetical, Creator or Custom Order.
+- **Genre search** through Last.fm tags, which finds niche genres that Spotify's own search misses.
+- **Select songs** with Ctrl+click and Shift+click to like or download them at once, or like every song of a playlist or album.
+- Albums as a grid of covers, local files inside playlists.
 
-Unofficial builds of Psst are also available through the [AUR](https://aur.archlinux.org/packages/psst-git) and [Homebrew](https://formulae.brew.sh/cask/psst).
+### Playback
+
+- **Queue** next to the page: what plays next, to reorder or remove, and what already played.
+- **Picks up where you left off**, paused, when Psst starts again.
+- **Hide songs** for 30 days or for good, like Spotify's "hide".
+- The playing song is highlighted only in the list it plays from, which follows it.
+- **Synced lyrics** (from Spotify, or [LRCLIB](https://lrclib.net) when Spotify has none), on their own page or in a small floating panel.
+- Media keys and the Windows media overlay.
+
+### Offline
+
+- **Download** playlists, albums, an artist's saved songs or any selection for offline listening. Stop a download at any time.
+- Downloads are kept apart from the cache of what you play, which stays under 5 GB. Both stay encrypted, as Spotify sends them.
+- Marks for downloaded songs, playlists and artists, and a "Show Downloaded Only" switch on playlists.
+- Your playlists and liked songs still show without a connection.
+
+### Integrations
+
+- **Discord Rich Presence** with your own Discord app: shows the song and the artist, and nothing while paused.
+- **Last.fm** scrobbling, with the track's length.
+
+### Everyday use
+
+- Survives flaky connections: requests are retried, and errors have a **Retry** button.
+- Follows Windows' light or dark mode.
+- Keyboard shortcuts: Ctrl+F finds in the open list, Ctrl+L goes to the search box, Ctrl+1–5 open the sidebar pages, Ctrl+R reloads the page, space plays or pauses.
 
 ## Building
 
-On all platforms, the **latest [Rust](https://rustup.rs/) stable** (at least 1.65.0) is required.
-For platform-specific requirements, see the dropdowns below.
-
-<details>
-<summary>Linux</summary>
-
-Our user-interface library, Druid, has two possible backends on Linux: GTK and pure X11, with a Wayland backend in the works.
-The default Linux backend is GTK.
-Before building on Linux, make sure the required dependencies are installed.
-
-### Debian/Ubuntu
+There are no prebuilt releases: build it on Windows with the latest stable [Rust](https://rustup.rs/).
 
 ```shell
-sudo apt-get install libssl-dev libgtk-3-dev libcairo2-dev libasound2-dev
+cargo build --release
 ```
 
-### RHEL/Fedora
+The app is then `target\release\psst-gui.exe`. Close Psst before building, or Windows won't let the new file replace it.
+
+Before pushing, run the same checks the project used to run on CI:
 
 ```shell
-sudo dnf install openssl-devel gtk3-devel cairo-devel alsa-lib-devel
+cargo clippy --all-targets -- -D warnings
+cargo test
 ```
 
-</details>
+## Project structure
 
-<details>
-<summary>OpenBSD (WIP)</summary>
+- `/psst-core` - Spotify session, audio file retrieval, decoding, audio output, playback queue, downloads, Last.fm.
+- `/psst-gui` - The app, built with [Druid](https://github.com/linebender/druid).
 
-OpenBSD support is still a WIP, and things will likely not function as intended.
-Similar to Linux, Druid defaults to GTK while also providing a pure X11 backend.
-Furthermore, bindgen must be able to find LLVM through the expected environment variable.
-Only OpenBSD/amd64 has been tested so far.
+## Privacy
 
-```shell
-doas pkg_add gtk+3 cairo llvm
-export LIBCLANG_PATH=/usr/local/lib
-```
+Psst doesn't call home. Besides Spotify's own servers, it only talks to:
 
-In case rustc(1) fails building bigger crates
+- [LRCLIB](https://lrclib.net), for lyrics Spotify doesn't have.
+- [ip-api.com](https://ip-api.com), for your region and time zone, which Spotify's Home sections need. Nothing about your account is sent.
+- [Last.fm](https://www.last.fm), only when you connect it, for scrobbles and genre search.
+- Discord, on your computer, only when Rich Presence is on.
 
-```shell
-memory allocation of xxxx bytes failed
-error: could not compile `gtk`
-Caused by:
-  process didn't exit successfully: `rustc --crate-name gtk [...]` (signal: 6, SIGABRT: process abort signal)
-warning: build failed, waiting for other jobs to finish...
-```
-
-try increasing your user's maximum heap size:
-
-```shell
-ulimit -d $(( 2 * `ulimit -d` ))
-```
-
-</details>
-
----
-
-#### Build from Source
-
-```shell
-cargo build
-# Append `--release` for a release build.
-```
-
-#### Run from Source
-
-```shell
-cargo run --bin psst-gui
-# Append `--release` for a release build.
-```
-
-#### Build Installation Bundle (i.e., macOS .app)
-
-```shell
-cargo install cargo-bundle
-cargo bundle --release
-```
-
-## Roadmap
-
-- [x] Vorbis track playback
-- [x] Browsing saved albums and tracks
-- [x] Save / unsave albums and tracks
-- [x] Browsing followed playlists
-- [x] Search for artists, albums, and tracks
-- [x] Podcast support
-- [x] Media keys control
-- [x] Open Spotify links through the search bar
-- [x] Audio volume control
-- [x] Audio loudness normalization
-- [x] Genre playlists and "For You" content
-- [x] Dark theme
-- [x] Credits support
-- [ ] Resilience to network errors (automatically retry timed-out requests)
-- [ ] Managing playlists
-  - Follow/unfollow
-  - Add/remove tracks
-  - Reorder tracks
-  - Rename playlist
-  - Playlist folders
-- [x] Playback queue
-- [ ] React to audio output device events
-  - Pause after disconnecting headphones
-  - Transfer playback after connecting headphones
-- [ ] Better caching
-  - Cache as many WebAPI responses as possible
-  - Visualize cache utilization
-    - Total cache usage in the config dialog
-    - Show time origin of cached data, allow to refresh
-- [ ] Trivia on the artist page, Wikipedia links
-- [ ] Downloading encrypted tracks
-- [ ] Reporting played tracks to Spotify servers
-- [ ] OS-specific application bundles
-- UI
-  - [ ] Rethink the current design, consider a two-pane layout
-    - Left pane for browsing
-    - Right pane for current playback
-  - [ ] Detect light/dark OS theme
-  - [ ] Robust error states, ideally with a retry button
-  - [ ] Correct playback highlight
-    - Highlight now-playing track only in the correct album/playlist
-    - Keep highlighted track in viewport
-  - [ ] Paging or virtualized lists for albums and tracks
-  - [ ] Grid for albums and artists
-  - [ ] Robust active/inactive menu visualization
-  - [ ] Save playback state
-
-## Development
-
-Contributions are very welcome!  
-Here's the basic project structure:
-
-- `/psst-core` - Core library, takes care of Spotify TCP session, audio file retrieval, decoding, audio output, playback queue, etc.
-- `/psst-gui` - GUI application built with [Druid](https://github.com/linebender/druid)
-
-## Privacy Policy
-
-Psst connects only to the official Spotify servers and does not call home.
-Caches of various things are stored locally and can be deleted anytime.
-User credentials are not stored at all; instead, a re-usable authentication token from Spotify is used.
+Your password is not stored: Psst keeps a reusable login token from Spotify. Settings live in `%APPDATA%\Psst`, and the cache and downloads in `%LOCALAPPDATA%\Psst`, which you can clear from Preferences.
 
 ## Thanks
 
-This project would not exist without the following:
+This fork stands on [Psst](https://github.com/jpochyla/psst) by Jan Pochyla and its contributors, and Psst wouldn't exist without:
 
-- Big thank you to [`librespot`](https://github.com/librespot-org/librespot), the Open Source Spotify client library for Rust. Most of `psst-core` is directly inspired by the ideas and code of `librespot`, although with a few differences:
-  - Spotify Connect (remote control) is not supported yet.
-  - Psst is completely synchronous, without `tokio` or other `async` runtime, although it will probably change in the future.
-  - Psst is using HTTPS-based CDN audio file retrieval, similar to the official Web client or [`librespot-java`](https://github.com/librespot-org/librespot-java), instead of the channel-based approach in `librespot`.
-- [`druid`](https://github.com/linebender/druid) native GUI library for Rust.
-- [`ncspot`](https://github.com/hrkfdn/ncspot) cross-platform ncurses Spotify client written in Rust, using `librespot`.
-- ...and of course other libraries and projects.
+- [`librespot`](https://github.com/librespot-org/librespot), the Open Source Spotify client library for Rust, which inspired most of `psst-core`.
+- [`druid`](https://github.com/linebender/druid), the native GUI library for Rust.
+- [`ncspot`](https://github.com/hrkfdn/ncspot), the ncurses Spotify client written in Rust.
+- ...and the other libraries and projects it uses.
