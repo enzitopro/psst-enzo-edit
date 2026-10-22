@@ -1,4 +1,4 @@
-use std::{path::Path, sync::Arc};
+use std::{path::Path, sync::Arc, time::Duration};
 
 use druid::{
     commands,
@@ -224,8 +224,9 @@ pub fn playable_widget(display: Display) -> impl Widget<PlayRow<Arc<Track>>> {
         .with_default_spacer()
         .with_child(saved.center())
         .env_scope(|env, row: &PlayRow<Arc<Track>>| {
-            // Grey out local items that aren't in the local folders.
-            if row.item.is_missing_local_file() {
+            // Grey out local items that aren't in the local folders, and the
+            // tracks not to play.
+            if row.item.is_missing_local_file() || row.ctx.library.is_hidden(&row.item.id) {
                 env.set(theme::TEXT_COLOR, env.get(theme::GREY_400));
                 env.set(theme::PLACEHOLDER_COLOR, env.get(theme::GREY_400));
                 env.set(theme::ICON_COLOR, env.get(theme::GREY_500));
@@ -404,6 +405,11 @@ pub fn track_menu(
         .command(add_to_queue_command(track, origin)),
     );
 
+    menu = menu.separator();
+    for entry in hide_entries(track, library) {
+        menu = menu.entry(entry);
+    }
+
     let mut playlist_menu = Menu::new(
         LocalizedString::new("menu-item-add-to-playlist").with_placeholder("Add to Playlist"),
     );
@@ -422,6 +428,19 @@ pub fn track_menu(
     menu = menu.entry(playlist_menu);
 
     menu
+}
+
+/// Not playing `track` for 30 days or for good, or playing it again.
+pub fn hide_entries(track: &Track, library: &Library) -> Vec<MenuItem<AppState>> {
+    const SNOOZE: Duration = Duration::from_secs(30 * 24 * 60 * 60);
+    if library.is_hidden(&track.id) {
+        return vec![MenuItem::new("Play Again").command(cmd::UNHIDE_TRACK.with(track.id))];
+    }
+    vec![
+        MenuItem::new("Don't Play for 30 Days")
+            .command(cmd::HIDE_TRACK.with((track.id, Some(SNOOZE)))),
+        MenuItem::new("Never Play").command(cmd::HIDE_TRACK.with((track.id, None))),
+    ]
 }
 
 fn add_to_queue_command(track: &Arc<Track>, origin: &PlaybackOrigin) -> Command {

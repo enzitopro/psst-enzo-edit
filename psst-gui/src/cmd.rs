@@ -56,6 +56,9 @@ pub const PLAYBACK_UPCOMING: Selector<Vec<ItemId>> = Selector::new("app.playback
 /// Shows or hides the queue next to the page.
 pub const TOGGLE_QUEUE: Selector = Selector::new("app.toggle-queue");
 pub const EDIT_QUEUE: Selector<QueueEdit> = Selector::new("app.edit-queue");
+/// Don't play a track for a while, or for good (`None`).
+pub const HIDE_TRACK: Selector<(TrackId, Option<Duration>)> = Selector::new("app.hide-track");
+pub const UNHIDE_TRACK: Selector<TrackId> = Selector::new("app.unhide-track");
 /// A track failed to load and was skipped, with the reason.
 pub const PLAYBACK_SKIPPED: Selector<(ItemId, String)> = Selector::new("app.playback-skipped");
 

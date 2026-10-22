@@ -24,7 +24,7 @@ use std::{
         atomic::{AtomicUsize, Ordering},
         Arc,
     },
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use druid::{
@@ -110,6 +110,7 @@ impl AppState {
             saved_shows: Promise::Empty,
             followed_artists: Promise::Empty,
             playlists: Promise::Empty,
+            hidden_tracks: Library::load_hidden_tracks(),
         });
         let common_ctx = Arc::new(CommonCtx {
             now_playing: None,
@@ -435,9 +436,57 @@ pub struct Library {
     pub saved_tracks: Promise<SavedTracks>,
     pub saved_shows: Promise<Shows>,
     pub followed_artists: Promise<Vector<Artist>>,
+    /// Tracks not to play, until a time (seconds since 1970) or for good.
+    pub hidden_tracks: HashMap<TrackId, Option<u64>>,
+}
+
+/// Seconds since 1970, as the hidden tracks keep their time.
+pub fn unix_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
 }
 
 impl Library {
+    pub fn is_hidden(&self, id: &TrackId) -> bool {
+        match self.hidden_tracks.get(id) {
+            Some(Some(until)) => unix_now() < *until,
+            Some(None) => true,
+            None => false,
+        }
+    }
+
+    // Not in the config: a build without this would drop it when saving.
+    fn hidden_tracks_path() -> Option<PathBuf> {
+        Config::config_dir().map(|dir| dir.join("hidden-tracks.json"))
+    }
+
+    /// The hidden tracks, without the ones whose time is over.
+    fn load_hidden_tracks() -> HashMap<TrackId, Option<u64>> {
+        let hidden: HashMap<TrackId, Option<u64>> = Self::hidden_tracks_path()
+            .and_then(|path| fs::read(path).ok())
+            .and_then(|json| serde_json::from_slice(&json).ok())
+            .unwrap_or_default();
+        let now = unix_now();
+        hidden
+            .into_iter()
+            .filter(|(_, until)| until.is_none_or(|until| now < until))
+            .collect()
+    }
+
+    pub fn save_hidden_tracks(&self) {
+        let Some(path) = Self::hidden_tracks_path() else {
+            return;
+        };
+        let result = serde_json::to_vec(&self.hidden_tracks)
+            .map_err(|err| err.to_string())
+            .and_then(|json| utils::write_atomic(&path, &json).map_err(|err| err.to_string()));
+        if let Err(err) = result {
+            log::warn!("failed to save hidden tracks: {err}");
+        }
+    }
+
     pub fn add_track(&mut self, track: Arc<Track>) {
         self.add_tracks([track]);
     }
@@ -607,6 +656,7 @@ impl Default for Library {
             saved_tracks: Promise::Empty,
             saved_shows: Promise::Empty,
             followed_artists: Promise::Empty,
+            hidden_tracks: HashMap::new(),
         }
     }
 }

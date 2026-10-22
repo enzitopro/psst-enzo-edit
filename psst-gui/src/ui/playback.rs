@@ -2,9 +2,10 @@ use std::time::Duration;
 
 use druid::{
     kurbo::{Affine, BezPath},
+    lens::Map,
     widget::{CrossAxisAlignment, Either, Flex, Label, LineBreaking, Spinner, ViewSwitcher},
     BoxConstraints, Cursor, Data, Env, Event, EventCtx, LayoutCtx, LensExt, LifeCycle,
-    LifeCycleCtx, MouseButton, PaintCtx, Point, Rect, RenderContext, Size, UpdateCtx, Widget,
+    LifeCycleCtx, Menu, MouseButton, PaintCtx, Point, Rect, RenderContext, Size, UpdateCtx, Widget,
     WidgetExt, WidgetPod,
 };
 use itertools::Itertools;
@@ -160,8 +161,36 @@ fn playing_item_widget() -> impl Widget<NowPlaying> {
                 false => Box::new(Flex::column()),
             },
         ))
+        .with_child(Maybe::or_empty(hide_button).lens(Map::new(
+            |now_playing: &NowPlaying| {
+                now_playing
+                    .item
+                    .track()
+                    .is_some()
+                    .then(|| now_playing.clone())
+            },
+            |_, _| {},
+        )))
         .padding(theme::grid(1.0))
         .link()
+}
+
+/// Spotify's "hide": not playing the track for a while, or for good.
+fn hide_button() -> impl Widget<NowPlaying> {
+    icons::CIRCLE_MINUS
+        .scale(theme::ICON_SIZE_SMALL)
+        .padding(theme::grid(1.0))
+        .link()
+        .rounded(theme::BUTTON_BORDER_RADIUS)
+        .on_left_click(|ctx, mouse, now_playing: &mut NowPlaying, _| {
+            if let Some(track) = now_playing.item.track() {
+                let mut menu = Menu::empty();
+                for entry in track::hide_entries(track, &now_playing.library) {
+                    menu = menu.entry(entry);
+                }
+                ctx.show_context_menu(menu, mouse.window_pos);
+            }
+        })
 }
 
 fn cover_widget(size: f64) -> impl Widget<NowPlaying> {

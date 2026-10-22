@@ -31,14 +31,33 @@ use crate::{
     cmd,
     data::Nav,
     data::{
-        AppState, CommonCtx, Config, NowPlaying, Playable, Playback, PlaybackOrigin, PlaybackState,
-        QueueBehavior, QueueEdit, QueueEntry, SavedPlayback, Track, TrackId,
+        unix_now, AppState, CommonCtx, Config, Library, NowPlaying, Playable, Playback,
+        PlaybackOrigin, PlaybackPayload, PlaybackState, QueueBehavior, QueueEdit, QueueEntry,
+        SavedPlayback, Track, TrackId,
     },
     discord::{DiscordPresence, Presence},
     error::Error,
     ui::lyrics,
     webapi::WebApi,
 };
+
+/// The payload's items without the hidden tracks, except the one clicked, and
+/// where that one is now.
+fn without_hidden(payload: &PlaybackPayload, library: &Library) -> (Vector<Playable>, usize) {
+    let clicked = payload.items.get(payload.position).map(Playable::id);
+    let mut position = 0;
+    let mut items = Vector::new();
+    for (index, item) in payload.items.iter().enumerate() {
+        let hidden = matches!(item, Playable::Track(track) if library.is_hidden(&track.id));
+        if index == payload.position {
+            position = items.len();
+        } else if hidden && Some(item.id()) != clicked {
+            continue;
+        }
+        items.push_back(item.clone());
+    }
+    (items, position)
+}
 
 /// Loads the queue of the last session, paused where it was.
 const RESTORE_PLAYBACK: Selector = Selector::new("app.playback.restore");
@@ -743,16 +762,55 @@ where
             }
             Event::Command(cmd) if cmd.is(cmd::PLAY_TRACKS) => {
                 let payload = cmd.get_unchecked(cmd::PLAY_TRACKS);
-                data.playback.queue = payload
-                    .items
-                    .iter()
+                let (items, position) = without_hidden(payload, &data.common_ctx.library);
+                data.playback.queue = items
+                    .into_iter()
                     .map(|item| QueueEntry {
                         origin: payload.origin.to_owned(),
-                        item: item.to_owned(),
+                        item,
                     })
                     .collect();
 
-                self.play(&data.playback.queue, payload.position);
+                self.play(&data.playback.queue, position);
+                ctx.set_handled();
+            }
+            Event::Command(cmd) if cmd.is(cmd::HIDE_TRACK) => {
+                let (id, time) = *cmd.get_unchecked(cmd::HIDE_TRACK);
+                let until = time.map(|time| unix_now() + time.as_secs());
+                data.with_library_mut(|library| {
+                    library.hidden_tracks.insert(id, until);
+                    library.save_hidden_tracks();
+                });
+                // Out of what plays next, and skipped if it plays now.
+                let upcoming: Vector<_> = data
+                    .playback
+                    .upcoming
+                    .iter()
+                    .filter(|entry| entry.item.id() != id.0)
+                    .cloned()
+                    .collect();
+                if upcoming.len() != data.playback.upcoming.len() {
+                    self.send(PlayerEvent::Command(PlayerCommand::SetUpcoming {
+                        items: Self::playback_items(&upcoming),
+                    }));
+                    data.playback.upcoming = upcoming;
+                }
+                let playing = data.playback.now_playing.as_ref();
+                if playing.is_some_and(|playing| playing.item.id() == id.0) {
+                    self.next();
+                }
+                data.info_alert(match time {
+                    Some(_) => "Won't play this song for 30 days.",
+                    None => "Won't play this song again.",
+                });
+                ctx.set_handled();
+            }
+            Event::Command(cmd) if cmd.is(cmd::UNHIDE_TRACK) => {
+                let id = *cmd.get_unchecked(cmd::UNHIDE_TRACK);
+                data.with_library_mut(|library| {
+                    library.hidden_tracks.remove(&id);
+                    library.save_hidden_tracks();
+                });
                 ctx.set_handled();
             }
             Event::Command(cmd) if cmd.is(cmd::PLAY_PAUSE) => {
@@ -932,4 +990,66 @@ fn random_lowercase_string(len: usize) -> String {
         chars.push('a');
     }
     chars.into_iter().rev().collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use psst_core::item_id::{ItemId, ItemIdType};
+
+    use super::*;
+    use crate::webapi::local_library::{local_track, LocalItem};
+
+    fn track(n: u128) -> Playable {
+        let item = LocalItem {
+            title: n.to_string(),
+            artists: vec![],
+            album: String::new(),
+            duration_ms: None,
+        };
+        let mut track = local_track(&item, None, 1, 1);
+        track.id = TrackId(ItemId::new(n, ItemIdType::Track));
+        Playable::Track(Arc::new(track))
+    }
+
+    #[test]
+    fn hidden_tracks_are_skipped_unless_clicked() {
+        let mut library = Library::default();
+        let hide = |library: &mut Library, n, until| {
+            library
+                .hidden_tracks
+                .insert(TrackId(ItemId::new(n, ItemIdType::Track)), until);
+        };
+        hide(&mut library, 1, None);
+        hide(&mut library, 3, Some(unix_now() + 60));
+        // Over already, so it plays.
+        hide(&mut library, 4, Some(unix_now() - 60));
+        let payload = |position| PlaybackPayload {
+            origin: PlaybackOrigin::Library,
+            items: (0..5).map(track).collect(),
+            position,
+        };
+        let ids = |(items, position): (Vector<Playable>, usize)| {
+            let ids: Vec<u128> = items.iter().map(|item| item.id().id).collect();
+            (ids, position)
+        };
+        assert_eq!(
+            ids(without_hidden(&payload(2), &library)),
+            (vec![0, 2, 4], 1)
+        );
+        // Clicked, a hidden track plays anyway.
+        assert_eq!(
+            ids(without_hidden(&payload(3), &library)),
+            (vec![0, 2, 3, 4], 2)
+        );
+    }
+
+    #[test]
+    fn hidden_tracks_keep_their_ids_in_the_file() {
+        let mut library = Library::default();
+        let id = TrackId(ItemId::new(7, ItemIdType::Track));
+        library.hidden_tracks.insert(id, None);
+        let json = serde_json::to_string(&library.hidden_tracks).unwrap();
+        let back: druid::im::HashMap<TrackId, Option<u64>> = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.get(&id), Some(&None));
+    }
 }
