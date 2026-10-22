@@ -1980,14 +1980,17 @@ impl WebApi {
             self.paginated_limit
         };
 
+        let local = Some(LocalLibrary::global());
         let page = |offset| self.get_pathfinder_playlist_page(id, offset, PAGE_SIZE);
         let first = page(0)?;
         let total = first.total_count().min(limit);
         let offsets: Vec<_> = (PAGE_SIZE..total).step_by(PAGE_SIZE).collect();
-        let rest = fetch_pages(&offsets, page)?;
+        // Each page becomes tracks as it comes: holding the parsed responses of
+        // 4000 liked songs until the last one took a few hundred MB.
+        let rest = fetch_pages(&offsets, |offset| Ok(page(offset)?.into_tracks(local)))?;
         let mut tracks = Vector::new();
-        for response in std::iter::once(first).chain(rest) {
-            for mut track in response.into_tracks(Some(LocalLibrary::global())) {
+        for page_tracks in std::iter::once(first.into_tracks(local)).chain(rest) {
+            for mut track in page_tracks {
                 // Keeps the playlist order for sorting by "date added".
                 Arc::make_mut(&mut track).track_pos = tracks.len();
                 tracks.push_back(track);

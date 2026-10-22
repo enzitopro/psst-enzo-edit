@@ -185,8 +185,8 @@ where
         env: &Env,
     ) {
         if let LifeCycle::WidgetAdded = event {
-            // Loads the library's saved tracks without the user needing to click on the tab.
-            ctx.submit_command(cmd::NAVIGATE.with(Nav::SavedTracks));
+            // Not through the Tracks page first, to load the saved tracks: pages stay
+            // built once visited, and 4000 rows took ~170 MB.  The session loads them.
             // Load the last route, or the default.
             ctx.submit_command(
                 cmd::NAVIGATE.with(data.config.last_route.to_owned().unwrap_or_default()),
