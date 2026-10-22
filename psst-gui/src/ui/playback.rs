@@ -5,8 +5,8 @@ use druid::{
     lens::Map,
     widget::{CrossAxisAlignment, Either, Flex, Label, LineBreaking, Spinner, ViewSwitcher},
     BoxConstraints, Cursor, Data, Env, Event, EventCtx, LayoutCtx, LensExt, LifeCycle,
-    LifeCycleCtx, Menu, MouseButton, PaintCtx, Point, Rect, RenderContext, Size, UpdateCtx, Widget,
-    WidgetExt, WidgetPod,
+    LifeCycleCtx, Menu, MouseButton, PaintCtx, Point, Rect, RenderContext, Size, Target, UpdateCtx,
+    Widget, WidgetExt, WidgetPod,
 };
 use itertools::Itertools;
 
@@ -23,7 +23,7 @@ use crate::{
     },
 };
 
-use super::{episode, library, theme, track, utils};
+use super::{episode, library, lyrics, theme, track, utils};
 
 pub fn panel_widget() -> impl Widget<AppState> {
     let seek_bar = Maybe::or_empty(SeekBar::new).lens(Playback::now_playing);
@@ -41,6 +41,66 @@ pub fn panel_widget() -> impl Widget<AppState> {
         .on_command(ADD_TO_QUEUE, |_, _, data| {
             data.info_alert("Track added to queue.")
         })
+}
+
+/// The playback bar alone, in a small window that stays on top, and the lyrics
+/// under it on demand.  Its buttons act through the main window, which plays.
+pub fn mini_player_widget() -> impl Widget<AppState> {
+    const WIDTH: f64 = theme::GRID * 60.0;
+    let seek_bar = Maybe::or_empty(SeekBar::new).lens(Playback::now_playing);
+    let item_info = Maybe::or_empty(playing_item_widget).lens(Playback::now_playing);
+    let controls = Either::new(
+        |playback: &Playback, _| playback.now_playing.is_some(),
+        player_widget(),
+        Label::new("Nothing playing")
+            .with_text_color(theme::PLACEHOLDER_COLOR)
+            .padding(theme::grid(2.0)),
+    );
+    let lyrics = Label::dynamic(|data: &AppState, _| {
+        if data.mini_lyrics_open {
+            "Hide Lyrics".to_string()
+        } else {
+            "Show Lyrics".to_string()
+        }
+    })
+    .with_text_size(theme::TEXT_SIZE_SMALL)
+    .padding((theme::grid(1.0), theme::grid(0.5)))
+    .link()
+    .rounded(theme::BUTTON_BORDER_RADIUS)
+    .on_left_click(|ctx, _, data: &mut AppState, _| {
+        data.mini_lyrics_open = !data.mini_lyrics_open;
+        // The window grows down to fit them.
+        let height = if data.mini_lyrics_open {
+            theme::grid(60.0)
+        } else {
+            theme::grid(22.0)
+        };
+        let width = ctx.window().get_size().width.max(WIDTH);
+        ctx.window().set_size(Size::new(width, height));
+        if let (true, Some(now_playing)) = (data.mini_lyrics_open, &data.playback.now_playing) {
+            let show = lyrics::SHOW_LYRICS.with(now_playing.clone());
+            ctx.submit_command(show.to(Target::Global));
+        }
+    });
+    Flex::column()
+        .cross_axis_alignment(CrossAxisAlignment::Fill)
+        .with_child(
+            Flex::column()
+                .cross_axis_alignment(CrossAxisAlignment::Fill)
+                .with_child(seek_bar)
+                .with_child(item_info)
+                .with_child(controls)
+                .lens(AppState::playback),
+        )
+        .with_child(lyrics.align_left())
+        .with_flex_child(
+            Either::new(
+                |data: &AppState, _| data.mini_lyrics_open,
+                lyrics::mini_player_lyrics(),
+                Empty,
+            ),
+            1.0,
+        )
 }
 
 fn playing_item_widget() -> impl Widget<NowPlaying> {
@@ -251,6 +311,11 @@ fn player_widget() -> impl Widget<Playback> {
                         ctx.submit_command(cmd::TOGGLE_QUEUE);
                     }),
                 )
+                .with_child(small_button_widget(&icons::MINI_PLAYER).on_left_click(
+                    |ctx, _, _, _| {
+                        ctx.submit_command(cmd::TOGGLE_MINI_PLAYER);
+                    },
+                ))
                 .align_right(),
         )
         .padding(theme::grid(2.0))

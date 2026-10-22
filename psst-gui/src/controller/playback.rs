@@ -560,7 +560,7 @@ impl PlaybackController {
     }
 
     fn update_lyrics(&mut self, ctx: &mut EventCtx, data: &AppState, now_playing: &NowPlaying) {
-        if matches!(data.nav, Nav::Lyrics) || data.lyrics_panel_open {
+        if matches!(data.nav, Nav::Lyrics) || data.lyrics_panel_open || data.mini_lyrics_open {
             ctx.submit_command(lyrics::SHOW_LYRICS.with(now_playing.clone()));
         }
     }

@@ -127,9 +127,8 @@ fn search_results_widget() -> impl Widget<AppState> {
                     } else {
                         "plain"
                     };
-                    let length = utils::as_minutes_and_seconds(Duration::from_secs_f64(
-                        c.duration.max(0.0),
-                    ));
+                    let length =
+                        utils::as_minutes_and_seconds(Duration::from_secs_f64(c.duration.max(0.0)));
                     if c.album_name.is_empty() {
                         format!("{length} • {kind}")
                     } else {
@@ -191,7 +190,8 @@ fn search_results_widget() -> impl Widget<AppState> {
         {
             WebApi::global().remember_lyrics_choice(track, candidate);
         }
-        data.lyrics.resolve((), crate::webapi::lyrics_from_candidate(candidate));
+        data.lyrics
+            .resolve((), crate::webapi::lyrics_from_candidate(candidate));
         data.lyrics_search.results.clear();
     })
 }
@@ -280,9 +280,7 @@ fn lyrics_line_widget(style: LineStyle) -> impl Widget<Ctx<Playhead, TrackLines>
                 std::cmp::Ordering::Less => {
                     env.set(theme::TEXT_COLOR, env.get(theme::PLACEHOLDER_COLOR))
                 }
-                std::cmp::Ordering::Greater => {
-                    env.set(theme::TEXT_COLOR, env.get(theme::GREY_400))
-                }
+                std::cmp::Ordering::Greater => env.set(theme::TEXT_COLOR, env.get(theme::GREY_400)),
                 std::cmp::Ordering::Equal => {}
             }
         })
@@ -366,6 +364,18 @@ pub fn lyrics_loader<W: Widget<AppState> + 'static>(widget: W) -> impl Widget<Ap
 /// Small lyrics panel floating over the bottom right corner of the main
 /// window, toggled from the playback bar, so the lyrics stay visible while
 /// browsing.
+/// The lyrics under the mini player's controls.
+pub fn mini_player_lyrics() -> impl Widget<AppState> {
+    Scroll::new(lyrics_lines_widget(PANEL_STYLE).padding(Insets::new(
+        theme::grid(0.5),
+        0.0,
+        theme::grid(0.5),
+        theme::grid(1.5),
+    )))
+    .vertical()
+    .expand()
+}
+
 pub fn lyrics_panel() -> impl Widget<AppState> {
     let title = Label::dynamic(|data: &AppState, _| {
         data.playback

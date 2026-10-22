@@ -92,6 +92,8 @@ pub struct AppState {
     pub lyrics_panel_open: bool,
     /// The queue next to the page.
     pub queue_panel_open: bool,
+    /// The mini player shows the lyrics under its controls.
+    pub mini_lyrics_open: bool,
     /// The queue shows what played instead of what plays next.
     pub queue_shows_history: bool,
     pub credits: Option<TrackCredits>,
@@ -190,6 +192,7 @@ impl AppState {
             lyrics_search: LyricsSearch::default(),
             lyrics_panel_open: false,
             queue_panel_open: false,
+            mini_lyrics_open: false,
             queue_shows_history: false,
             credits: None,
             download_queue: Vector::new(),

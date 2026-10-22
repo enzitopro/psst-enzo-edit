@@ -93,6 +93,17 @@ pub fn account_setup_window() -> WindowDesc<AppState> {
         .transparent_titlebar(true)
 }
 
+/// The playback bar in a small window that stays on top.
+pub fn mini_player_window() -> WindowDesc<AppState> {
+    let widget = ThemeScope::new(playback::mini_player_widget().background(theme::BACKGROUND_DARK));
+    WindowDesc::new(widget)
+        .title("Psst")
+        .window_size((theme::grid(60.0), theme::grid(22.0)))
+        .with_min_size((theme::grid(40.0), theme::grid(18.0)))
+        .resizable(true)
+        .set_always_on_top(true)
+}
+
 pub fn artwork_window() -> WindowDesc<AppState> {
     let win_size = (theme::grid(50.0), theme::grid(50.0));
 
