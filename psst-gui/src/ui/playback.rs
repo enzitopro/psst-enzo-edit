@@ -506,12 +506,15 @@ where
 
 struct SeekBar {
     loudness_path: BezPath,
+    /// Where the bar is being dragged to, as a fraction of the track.
+    dragging: Option<f64>,
 }
 
 impl SeekBar {
     fn new() -> Self {
         Self {
             loudness_path: BezPath::new(),
+            dragging: None,
         }
     }
 }
@@ -519,17 +522,23 @@ impl SeekBar {
 impl Widget<NowPlaying> for SeekBar {
     fn event(&mut self, ctx: &mut EventCtx, event: &Event, _data: &mut NowPlaying, _env: &Env) {
         match event {
-            Event::MouseMove(_) => {
+            Event::MouseMove(mouse) => {
                 ctx.set_cursor(&Cursor::Pointer);
+                // Shows where it goes, the seek happens on release.
+                if ctx.is_active() {
+                    self.dragging = Some((mouse.pos.x / ctx.size().width).clamp(0.0, 1.0));
+                    ctx.request_paint();
+                }
             }
             Event::MouseDown(mouse) => {
                 if mouse.button == MouseButton::Left {
                     ctx.set_active(true);
+                    self.dragging = Some((mouse.pos.x / ctx.size().width).clamp(0.0, 1.0));
+                    ctx.request_paint();
                 }
             }
             Event::MouseUp(mouse) if ctx.is_active() && mouse.button == MouseButton::Left => {
-                if ctx.is_hot() {
-                    let fraction = mouse.pos.x / ctx.size().width;
+                if let Some(fraction) = self.dragging.take() {
                     ctx.submit_command(cmd::PLAY_SEEK.with(fraction));
                 }
                 ctx.set_active(false);
@@ -580,7 +589,8 @@ impl Widget<NowPlaying> for SeekBar {
 
     fn paint(&mut self, ctx: &mut PaintCtx, data: &NowPlaying, env: &Env) {
         if self.loudness_path.is_empty() {
-            paint_progress_bar(ctx, data, env)
+            let progress = data.progress.as_secs_f64() / data.item.duration().as_secs_f64();
+            paint_progress_bar(ctx, self.dragging.unwrap_or(progress), env)
         } else {
             paint_audio_analysis(ctx, data, &self.loudness_path, env)
         }
@@ -670,10 +680,8 @@ fn paint_audio_analysis(ctx: &mut PaintCtx, data: &NowPlaying, path: &BezPath, e
     });
 }
 
-fn paint_progress_bar(ctx: &mut PaintCtx, data: &NowPlaying, env: &Env) {
-    let elapsed_time = data.progress.as_secs_f64();
-    let total_time = data.item.duration().as_secs_f64();
-
+/// The bar filled up to `elapsed_frac` of its width.
+fn paint_progress_bar(ctx: &mut PaintCtx, elapsed_frac: f64, env: &Env) {
     let (elapsed_color, remaining_color) = if ctx.is_hot() {
         (env.get(theme::GREY_200), env.get(theme::GREY_500))
     } else {
@@ -681,7 +689,6 @@ fn paint_progress_bar(ctx: &mut PaintCtx, data: &NowPlaying, env: &Env) {
     };
     let bounds = ctx.size();
 
-    let elapsed_frac = elapsed_time / total_time;
     let elapsed_width = bounds.width * elapsed_frac;
     let remaining_width = bounds.width - elapsed_width;
     let elapsed = Size::new(elapsed_width, bounds.height).round();
