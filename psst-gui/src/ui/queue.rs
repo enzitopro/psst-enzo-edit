@@ -27,7 +27,7 @@ const DISPLAY: playable::Display = playable::Display {
     },
 };
 
-/// What plays next, to reorder, and what played before, next to the page.
+/// What plays next, to reorder, or what played before, next to the page.
 /// Rows have the like button and the usual track menu.
 pub fn panel_widget() -> impl Widget<AppState> {
     let upcoming = Either::new(
@@ -42,12 +42,18 @@ pub fn panel_widget() -> impl Widget<AppState> {
         playable::list_widget(DISPLAY),
     )
     .lens(shown(|playback| &playback.history));
+    let tabs = Flex::row()
+        .with_child(tab("Next Up", false))
+        .with_child(tab("Recently Played", true));
     let panel = Flex::column()
         .cross_axis_alignment(CrossAxisAlignment::Fill)
-        .with_child(header("Next Up"))
-        .with_child(upcoming)
-        .with_child(header("Recently Played"))
-        .with_child(history)
+        .with_child(tabs)
+        .with_spacer(theme::grid(1.0))
+        .with_child(Either::new(
+            |data: &AppState, _| data.queue_shows_history,
+            history,
+            upcoming,
+        ))
         .padding(theme::grid(1.0));
     Either::new(
         |data: &AppState, _| data.queue_panel_open,
@@ -119,12 +125,20 @@ impl<W: Widget<WithCtx<Vector<QueueEntry>>>> Controller<WithCtx<Vector<QueueEntr
     }
 }
 
-fn header<T: druid::Data>(text: &str) -> impl Widget<T> {
+/// Switches the panel between what plays next and what played.
+fn tab(text: &str, history: bool) -> impl Widget<AppState> {
     Label::new(text)
         .with_font(theme::UI_FONT_MEDIUM)
-        .with_text_color(theme::PLACEHOLDER_COLOR)
         .with_text_size(theme::TEXT_SIZE_SMALL)
-        .padding((theme::grid(1.0), theme::grid(2.0), 0.0, theme::grid(1.0)))
+        .env_scope(move |env, data: &AppState| {
+            if data.queue_shows_history != history {
+                env.set(theme::TEXT_COLOR, env.get(theme::PLACEHOLDER_COLOR));
+            }
+        })
+        .padding((theme::grid(1.0), theme::grid(0.5)))
+        .link()
+        .rounded(theme::BUTTON_BORDER_RADIUS)
+        .on_left_click(move |_, _, data: &mut AppState, _| data.queue_shows_history = history)
 }
 
 fn placeholder<T: druid::Data>(text: &str) -> impl Widget<T> {

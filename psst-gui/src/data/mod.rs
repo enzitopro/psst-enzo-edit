@@ -92,6 +92,8 @@ pub struct AppState {
     pub lyrics_panel_open: bool,
     /// The queue next to the page.
     pub queue_panel_open: bool,
+    /// The queue shows what played instead of what plays next.
+    pub queue_shows_history: bool,
     pub credits: Option<TrackCredits>,
     /// Offline downloads still to do, in download order, and how many were
     /// queued since the queue was last empty.
@@ -184,6 +186,7 @@ impl AppState {
             lyrics_search: LyricsSearch::default(),
             lyrics_panel_open: false,
             queue_panel_open: false,
+            queue_shows_history: false,
             credits: None,
             download_queue: Vector::new(),
             download_total: 0,
