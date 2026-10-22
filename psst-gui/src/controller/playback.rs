@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    mem,
     sync::Arc,
     thread::{self, JoinHandle},
     time::Duration,
@@ -68,6 +69,8 @@ pub struct PlaybackController {
     output: Option<DefaultAudioOutput>,
     media_controls: Option<MediaControls>,
     has_scrobbled: bool,
+    /// The last session's track is loading, paused where it was.
+    restoring: bool,
     scrobbler: Option<Scrobbler>,
     discord: DiscordPresence,
     startup: bool,
@@ -106,6 +109,7 @@ impl PlaybackController {
             output: None,
             media_controls: None,
             has_scrobbled: false,
+            restoring: false,
             scrobbler: None,
             discord: DiscordPresence::new(),
             startup: true,
@@ -584,9 +588,14 @@ where
             Event::Command(cmd) if cmd.is(cmd::PLAYBACK_PLAYING) => {
                 let (item, progress) = cmd.get_unchecked(cmd::PLAYBACK_PLAYING);
 
-                // Song has changed, so we reset the has_scrobbled value
-                self.has_scrobbled = false;
-                self.report_now_playing(&data.playback);
+                // Song has changed, so we reset the has_scrobbled value.  Not for
+                // the restored one, which isn't playing: the jump to where it was
+                // would scrobble it.
+                let restored = mem::take(&mut self.restoring);
+                self.has_scrobbled = restored;
+                if !restored {
+                    self.report_now_playing(&data.playback);
+                }
 
                 if let Some(queued) = data.queued_entry(*item) {
                     data.playback.remember_played(&queued.item);
@@ -758,6 +767,7 @@ where
                             origin: saved.origin.clone(),
                         })
                         .collect();
+                    self.restoring = true;
                     self.send(PlayerEvent::Command(PlayerCommand::LoadQueuePaused {
                         items: Self::playback_items(&data.playback.queue),
                         position: saved.position,
