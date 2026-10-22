@@ -1853,9 +1853,10 @@ impl WebApi {
     /// shows them.  The public Web API leaves out Spotify-generated playlists
     /// (Daily Mixes and other mixes) and knows nothing about pins, so this asks
     /// pathfinder first and only falls back to the Web API.
-    pub fn get_playlists(&self) -> Result<Vector<Playlist>, Error> {
+    /// `order` is one of the library's sort orders, like "Alphabetical".
+    pub fn get_playlists(&self, order: &str) -> Result<Vector<Playlist>, Error> {
         self.with_offline_copy("offline", "playlists", || {
-            match self.get_library_playlists() {
+            match self.get_library_playlists(order) {
                 Ok(playlists) => Ok(playlists),
                 Err(err) => {
                     log::warn!("failed to load library from pathfinder, using Web API: {err}");
@@ -1895,9 +1896,10 @@ impl WebApi {
         Ok(result)
     }
 
-    fn get_library_playlists(&self) -> Result<Vector<Playlist>, Error> {
+    fn get_library_playlists(&self, order: &str) -> Result<Vector<Playlist>, Error> {
         // Include the playlists inside of folders.
-        let playlists = self.library_v3_items("Playlists", true, |page| page.into_playlists())?;
+        let playlists =
+            self.library_v3_items("Playlists", true, Some(order), |page| page.into_playlists())?;
         // Pinned playlists come first already, but don't rely on it.
         let (pinned, rest): (Vector<_>, Vector<_>) = playlists.into_iter().partition(|p| p.pinned);
         let mut playlists = pinned;
@@ -1907,7 +1909,7 @@ impl WebApi {
 
     /// The artists the user follows, in library order.
     pub fn get_followed_artists(&self) -> Result<Vector<Artist>, Error> {
-        self.library_v3_items("Artists", false, |page| page.into_artists())
+        self.library_v3_items("Artists", false, None, |page| page.into_artists())
     }
 
     /// Every item of the library filtered with `filter`, page by page.
@@ -1915,6 +1917,7 @@ impl WebApi {
         &self,
         filter: &str,
         flatten: bool,
+        order: Option<&str>,
         items: fn(pathfinder::LibraryResponse) -> Result<Vec<T>, String>,
     ) -> Result<Vector<T>, Error> {
         const PAGE_SIZE: usize = 50;
@@ -1926,7 +1929,7 @@ impl WebApi {
                 pathfinder::LIBRARY_V3,
                 json!({
                     "filters": [filter],
-                    "order": null,
+                    "order": order,
                     "textFilter": null,
                     "features": [],
                     "limit": PAGE_SIZE,

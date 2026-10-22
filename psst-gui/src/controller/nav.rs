@@ -27,7 +27,7 @@ impl NavController {
         }
         data.refresh_all();
         if data.library.playlists.state() == PromiseState::Rejected {
-            ctx.submit_command(playlist::LOAD_LIST);
+            ctx.submit_command(playlist::LOAD_LIST.with(data.config.playlist_order.clone()));
         }
         // Loaded pages of the library stay loaded otherwise.
         match data.nav {

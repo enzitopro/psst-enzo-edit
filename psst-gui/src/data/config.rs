@@ -141,6 +141,8 @@ pub struct Config {
     pub show_track_cover: bool,
     /// The Artists page shows a grid of pictures instead of a list.
     pub artists_grid: bool,
+    /// How the sidebar's playlists are sorted, one of Spotify's library orders.
+    pub playlist_order: String,
     pub window_size: Size,
     pub slider_scroll_scale: SliderScrollScale,
     /// The sort of each track list, keyed by `Nav::track_list`.  Lists never
@@ -178,6 +180,7 @@ impl Default for Config {
             queue_behavior: Default::default(),
             show_track_cover: Default::default(),
             artists_grid: false,
+            playlist_order: "Recents".to_string(),
             window_size: Size::new(theme::grid(80.0), theme::grid(100.0)),
             slider_scroll_scale: Default::default(),
             track_sorts: HashMap::new(),

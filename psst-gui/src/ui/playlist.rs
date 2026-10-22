@@ -19,7 +19,18 @@ use crate::{
 
 use super::{library, playable, theme, track, utils};
 
-pub const LOAD_LIST: Selector = Selector::new("app.playlist.load-list");
+/// Loads the sidebar's playlists, in a library sort order.
+pub const LOAD_LIST: Selector<String> = Selector::new("app.playlist.load-list");
+const SORT_LIST: Selector<String> = Selector::new("app.playlist.sort-list");
+
+/// The library's sort orders, as Spotify names them.
+const ORDERS: [&str; 5] = [
+    "Recents",
+    "Recently Added",
+    "Alphabetical",
+    "Creator",
+    "Custom Order",
+];
 pub const LOAD_DETAIL: Selector<(PlaylistLink, AppState)> =
     Selector::new("app.playlist.load-detail");
 pub const ADD_TRACK: Selector<PlaylistAddTrack> = Selector::new("app.playlist.add-track");
@@ -38,6 +49,30 @@ const SHOW_RENAME_PLAYLIST_CONFIRM: Selector<PlaylistLink> =
     Selector::new("app.playlist.show-rename");
 const SHOW_UNFOLLOW_PLAYLIST_CONFIRM: Selector<UnfollowPlaylist> =
     Selector::new("app.playlist.show-unfollow-confirm");
+
+/// "Sort: Recents" over the sidebar's playlists, a click picks another order.
+pub fn sort_widget() -> impl Widget<AppState> {
+    Label::dynamic(|data: &AppState, _| format!("Sort: {}", data.config.playlist_order))
+        .with_text_size(theme::TEXT_SIZE_SMALL)
+        .with_text_color(theme::PLACEHOLDER_COLOR)
+        .padding(Insets::uniform_xy(theme::grid(2.0), theme::grid(0.6)))
+        .link()
+        .on_left_click(|ctx, mouse, data: &mut AppState, _| {
+            let mut menu = Menu::<AppState>::new("Sort by");
+            for order in ORDERS {
+                let item = MenuItem::new(order)
+                    .selected(data.config.playlist_order == order)
+                    .command(SORT_LIST.with(order.to_string()));
+                menu = menu.entry(item);
+            }
+            ctx.show_context_menu(menu, mouse.window_pos);
+        })
+        .on_command(SORT_LIST, |ctx, order, data| {
+            data.config.playlist_order = order.clone();
+            ctx.submit_command(LOAD_LIST.with(order.clone()));
+        })
+        .align_left()
+}
 
 pub fn list_widget() -> impl Widget<AppState> {
     Async::new(
@@ -87,9 +122,14 @@ pub fn list_widget() -> impl Widget<AppState> {
     )
     .on_command_async(
         LOAD_LIST,
-        |_| WebApi::global().get_playlists(),
-        |_, data, d| data.with_library_mut(|l| l.playlists.defer(d)),
-        |_, data, r| data.with_library_mut(|l| l.playlists.update(r)),
+        |order| WebApi::global().get_playlists(&order),
+        |_, data, _| {
+            // Sorting again keeps showing the list meanwhile.
+            if !data.library.playlists.is_resolved() {
+                data.with_library_mut(|l| l.playlists.defer_default());
+            }
+        },
+        |_, data, (_, r)| data.with_library_mut(|l| l.playlists.resolve_or_reject((), r)),
     )
     .on_command_async(
         ADD_TRACK,

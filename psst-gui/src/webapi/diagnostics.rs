@@ -113,7 +113,7 @@ fn diagnostics_local_files_and_library() {
     );
 
     // 2. Library.
-    let playlists = WebApi::global().get_playlists().expect("library");
+    let playlists = WebApi::global().get_playlists("Recents").expect("library");
     let pinned: Vec<_> = playlists.iter().filter(|p| p.pinned).collect();
     let mixes: Vec<_> = playlists
         .iter()
@@ -290,7 +290,7 @@ fn diagnostics_library_edits() {
         .map(|t| t.id)
         .collect();
     let mix = api
-        .get_playlists()
+        .get_playlists("Recents")
         .unwrap()
         .into_iter()
         .find(|p| p.name.contains("Daily Mix"))
@@ -307,7 +307,7 @@ fn diagnostics_library_edits() {
 
     match api.get_user_profile() {
         Ok(profile) => {
-            let playlists = api.get_playlists().unwrap();
+            let playlists = api.get_playlists("Recents").unwrap();
             let own = playlists.iter().filter(|p| p.owner.id == profile.id).count();
             let editable = playlists.iter().filter(|p| p.collaborative).count();
             println!(
@@ -414,7 +414,7 @@ fn diagnostics_playlist_by_name() {
     let mut config = Config::load().expect("Psst config not found, log in first");
     init(&mut config);
     let name = std::env::var("PSST_DIAG_NAME").expect("PSST_DIAG_NAME");
-    let playlists = WebApi::global().get_playlists().expect("library");
+    let playlists = WebApi::global().get_playlists("Recents").expect("library");
     let playlist = playlists
         .iter()
         .find(|p| p.name.as_ref() == name)
@@ -1001,7 +1001,7 @@ fn diagnostics_rate_limits() {
     println!("search:       {}", short(api.search("Yeat", &[SearchTopic::Track], 5).map(|r| format!("ok {}", r.tracks.len()))));
     println!("playlist:     {}", short(api.get_playlist("0yDMZSlNmBSXnntlKAl33K").map(|p| format!("ok {}", p.name))));
     println!("saved albums: {}", short(api.get_saved_albums().map(|a| format!("ok {}", a.len()))));
-    println!("playlists:    {}", short(api.get_playlists().map(|p| format!("ok {}", p.len()))));
+    println!("playlists:    {}", short(api.get_playlists("Recents").map(|p| format!("ok {}", p.len()))));
     println!("artists:      {}", short(api.get_followed_artists().map(|a| format!("ok {}", a.len()))));
 }
 
@@ -1123,7 +1123,7 @@ fn diagnostics_offline_copies() {
     let token = config.get_or_refresh_webapi_token().ok();
     api.set_webapi_credentials(config.webapi_client_id_value().map(String::from), token);
 
-    let playlists = api.get_playlists().expect("playlists");
+    let playlists = api.get_playlists("Recents").expect("playlists");
     let copy: druid::im::Vector<crate::data::Playlist> =
         api.cache_get_json("offline", "playlists").expect("playlists copy");
     assert_eq!(copy.len(), playlists.len());

@@ -18,7 +18,7 @@ impl SessionController {
         crate::webapi::WebApi::global().set_session(data.session.clone());
 
         // Reload the global, usually visible data.
-        ctx.submit_command(playlist::LOAD_LIST);
+        ctx.submit_command(playlist::LOAD_LIST.with(data.config.playlist_order.clone()));
         // Also feeds the sidebar artists and the like buttons.
         ctx.submit_command(library::LOAD_TRACKS);
         ctx.submit_command(home::LOAD_MADE_FOR_YOU);
