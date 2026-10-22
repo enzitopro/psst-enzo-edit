@@ -35,7 +35,10 @@ pub fn list_widget<T>(display: Display) -> impl Widget<WithCtx<T>>
 where
     T: PlayableIter + Data,
 {
-    ControllerHost::new(List::new(move || playable_widget(display)), PlayController)
+    ControllerHost::new(
+        List::new(move || playable_widget(display)),
+        PlayController::default(),
+    )
 }
 
 pub fn list_widget_with_find<T>(
@@ -47,7 +50,7 @@ where
 {
     ControllerHost::new(
         List::new(move || Findable::new(playable_widget(display), selector)),
-        PlayController,
+        PlayController::default(),
     )
 }
 
@@ -336,7 +339,11 @@ pub fn play_buttons<T: PlayableIter + 'static>(
         .with_child(playback::queue_behavior_widget().lens(AppState::playback))
 }
 
-struct PlayController;
+#[derive(Default)]
+struct PlayController {
+    /// Where a Shift+click range starts: the last Ctrl+click.
+    anchor: Option<usize>,
+}
 
 impl<T, W> Controller<WithCtx<T>, W> for PlayController
 where
@@ -357,6 +364,23 @@ where
                     if let Some(payload) = payload(&data.data, clicked) {
                         ctx.submit_command(cmd::PLAY_TRACKS.with(payload));
                     }
+                    ctx.set_handled();
+                }
+                if let Some(&(clicked, range)) = note.get(cmd::SELECT) {
+                    let from = if range {
+                        self.anchor.unwrap_or(clicked)
+                    } else {
+                        self.anchor = Some(clicked);
+                        clicked
+                    };
+                    let rows = from.min(clicked)..=from.max(clicked);
+                    let mut tracks = Vec::new();
+                    data.data.for_each(|item, position| {
+                        if let (true, Playable::Track(track)) = (rows.contains(&position), item) {
+                            tracks.push(track);
+                        }
+                    });
+                    ctx.submit_command(cmd::SELECT_TRACKS.with((tracks, range)));
                     ctx.set_handled();
                 }
             }

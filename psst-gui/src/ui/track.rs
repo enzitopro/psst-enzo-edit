@@ -214,8 +214,11 @@ pub fn playable_widget(display: Display) -> impl Widget<PlayRow<Arc<Track>>> {
                 .with_child(major)
                 .with_spacer(2.0)
                 .with_child(minor)
-                .on_left_click(|ctx, _, row, _| {
-                    if !row.item.is_missing_local_file() {
+                .on_left_click(|ctx, mouse, row, _| {
+                    if mouse.mods.ctrl() || mouse.mods.shift() {
+                        let range = mouse.mods.shift();
+                        ctx.submit_notification(cmd::SELECT.with((row.position, range)))
+                    } else if !row.item.is_missing_local_file() {
                         ctx.submit_notification(cmd::PLAY.with(row.position))
                     }
                 }),
@@ -239,7 +242,7 @@ pub fn playable_widget(display: Display) -> impl Widget<PlayRow<Arc<Track>>> {
             if let Nav::AlbumDetail(_, Some(target_id)) = &row.ctx.nav {
                 return *target_id == row.item.id;
             }
-            row.is_playing
+            row.is_playing || row.ctx.selected.contains_key(&row.item.id)
         })
         .rounded(theme::BUTTON_BORDER_RADIUS)
         // Follows the playing track down the list, when the list is on screen.

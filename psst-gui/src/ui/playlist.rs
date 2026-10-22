@@ -1,6 +1,7 @@
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 
 use druid::{
+    lens::Map,
     widget::{Button, Either, Flex, Label, LensWrap, LineBreaking, List, TextBox},
     Insets, Lens, LensExt, LocalizedString, Menu, MenuItem, Selector, Size, UnitPoint, Widget,
     WidgetExt, WindowDesc,
@@ -446,7 +447,25 @@ pub fn detail_widget() -> impl Widget<AppState> {
 
     let playlist_tracks = async_tracks_widget();
 
-    let play_buttons = playable::play_buttons(|data| data.playlist_detail.tracks.resolved())
+    let downloaded_only = Label::dynamic(|data: &AppState, _| {
+        if data.common_ctx.downloaded_only {
+            "Show All Songs".to_string()
+        } else {
+            "Show Downloaded Only".to_string()
+        }
+    })
+    .with_text_size(theme::TEXT_SIZE_SMALL)
+    .link()
+    .on_left_click(|_, _, data: &mut AppState, _| {
+        let common = data.common_ctx_mut();
+        common.downloaded_only = !common.downloaded_only;
+    });
+    let play_buttons = Flex::row()
+        .with_child(playable::play_buttons(|data| {
+            data.playlist_detail.tracks.resolved()
+        }))
+        .with_default_spacer()
+        .with_child(downloaded_only)
         .padding((theme::grid(1.0), 0.0));
 
     Flex::column()
@@ -577,7 +596,7 @@ fn async_tracks_widget() -> impl Widget<AppState> {
 }
 
 fn tracks_widget() -> impl Widget<WithCtx<PlaylistTracks>> {
-    playable::list_widget_with_find(
+    let list = playable::list_widget_with_find(
         playable::Display {
             track: track::Display {
                 title: true,
@@ -588,7 +607,19 @@ fn tracks_widget() -> impl Widget<WithCtx<PlaylistTracks>> {
             },
         },
         cmd::FIND_IN_PLAYLIST,
-    )
+    );
+    // Only what plays without a connection, when asked.
+    list.lens(Map::new(
+        |playlist: &WithCtx<PlaylistTracks>| {
+            let mut shown = playlist.clone();
+            if playlist.ctx.downloaded_only {
+                let ctx = &playlist.ctx;
+                shown.data.tracks.retain(|track| ctx.plays_offline(track));
+            }
+            shown
+        },
+        |_, _| {},
+    ))
 }
 
 fn playlist_menu_ctx(playlist: &WithCtx<Playlist>) -> Menu<AppState> {

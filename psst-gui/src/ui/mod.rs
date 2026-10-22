@@ -26,7 +26,7 @@ use druid::{
         CrossAxisAlignment, Either, Flex, Label, LineBreaking, List, Scroll, Slider, Split,
         ViewSwitcher,
     },
-    Color, Env, Key, LensExt, Menu, MenuItem, Selector, Widget, WidgetExt, WindowDesc,
+    Color, Env, Insets, Key, LensExt, Menu, MenuItem, Selector, Widget, WidgetExt, WindowDesc,
 };
 use druid_shell::Cursor;
 use std::sync::Arc;
@@ -244,6 +244,7 @@ fn root_widget() -> impl Widget<AppState> {
                 .with_child(queue::panel_widget()),
             1.0,
         )
+        .with_child(selection_bar())
         .with_child(playback::panel_widget())
         .background(theme::BACKGROUND_LIGHT);
 
@@ -389,6 +390,54 @@ fn route_widget() -> impl Widget<AppState> {
 }
 
 /// "Downloading 3 of 80" and the track being saved, while offline downloads run.
+/// What to do with the tracks picked with Ctrl and Shift clicks.
+fn selection_bar() -> impl Widget<AppState> {
+    let selected = |data: &AppState| -> Vector<Arc<Track>> {
+        data.common_ctx.selected.values().cloned().collect()
+    };
+    let action = |label: &str| {
+        Label::new(label)
+            .with_text_size(theme::TEXT_SIZE_SMALL)
+            .padding(Insets::uniform_xy(theme::grid(1.0), theme::grid(0.5)))
+            .link()
+            .rounded(theme::BUTTON_BORDER_RADIUS)
+    };
+    let download = action("Download").on_left_click(move |ctx, _, data: &mut AppState, _| {
+        let tracks = selected(data);
+        let name = format!("{} selected songs", tracks.len()).into();
+        ctx.submit_command(cmd::DOWNLOAD_TRACKS.with((name, tracks)));
+        data.common_ctx_mut().selected.clear();
+    });
+    let like = action("Like").on_left_click(move |ctx, _, data: &mut AppState, _| {
+        ctx.submit_command(library::LIKE_TRACKS.with(selected(data)));
+        data.common_ctx_mut().selected.clear();
+    });
+    let clear = action("Clear").on_left_click(|_, _, data: &mut AppState, _| {
+        data.common_ctx_mut().selected.clear();
+    });
+    let bar = Flex::row()
+        .with_child(
+            Label::dynamic(|data: &AppState, _| {
+                format!("{} selected", data.common_ctx.selected.len())
+            })
+            .with_text_size(theme::TEXT_SIZE_SMALL),
+        )
+        .with_flex_spacer(1.0)
+        .with_child(download)
+        .with_child(like)
+        .with_child(clear)
+        .padding(Insets::uniform_xy(theme::grid(2.0), theme::grid(0.5)))
+        .background(Border::Top.with_color(theme::GREY_500));
+    Either::new(
+        |data: &AppState, _| data.common_ctx.selected.is_empty(),
+        Empty,
+        bar,
+    )
+    .on_command(cmd::SELECT_TRACKS, |_, (tracks, range), data| {
+        data.common_ctx_mut().select(tracks, *range);
+    })
+}
+
 fn download_status_widget() -> impl Widget<AppState> {
     Either::new(
         |data: &AppState, _| data.download_queue.is_empty(),

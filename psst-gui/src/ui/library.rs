@@ -28,6 +28,7 @@ pub const LOAD_SHOWS: Selector = Selector::new("app.library.load-shows");
 pub const SAVE_TRACK: Selector<Arc<Track>> = Selector::new("app.library.save-track");
 /// Like every track of a playlist or an album.
 pub const LIKE_PLAYLIST: Selector<PlaylistLink> = Selector::new("app.library.like-playlist");
+pub const LIKE_TRACKS: Selector<Vector<Arc<Track>>> = Selector::new("app.library.like-tracks");
 pub const LIKE_ALBUM: Selector<AlbumLink> = Selector::new("app.library.like-album");
 pub const UNSAVE_TRACK: Selector<TrackId> = Selector::new("app.library.unsave-track");
 
@@ -171,6 +172,14 @@ fn liked_all(data: &mut AppState, result: Result<Vector<Arc<Track>>, Error>) {
 /// Saved Tracks page isn't, so liking a track from another page used to do nothing.
 pub fn saved_tracks_loader() -> impl Widget<AppState> {
     Empty
+        .on_command_async(
+            LIKE_TRACKS,
+            |tracks| like_all(Ok(tracks)),
+            |_, data: &mut AppState, tracks| {
+                data.info_alert(format!("Adding {} songs to Liked Songs…", tracks.len()))
+            },
+            |_, data, (_, result)| liked_all(data, result),
+        )
         .on_command_async(
             LIKE_PLAYLIST,
             |link| like_all(WebApi::global().get_all_playlist_tracks(&link.id)),

@@ -81,6 +81,11 @@ pub const OFFLINE_PLAYLIST: Selector<(Arc<str>, usize, Vector<TrackId>)> =
 pub const DOWNLOADS_CLEARED: Selector = Selector::new("app.downloads-cleared");
 /// Stops the downloads running; what's downloaded stays.
 pub const CANCEL_DOWNLOADS: Selector = Selector::new("app.cancel-downloads");
+/// From a track row: Ctrl+click at a position, or Shift+click (`true`) for the
+/// range from the last Ctrl+click.
+pub const SELECT: Selector<(usize, bool)> = Selector::new("app.select");
+/// Tracks to toggle in the selection, or to add when a range (`true`).
+pub const SELECT_TRACKS: Selector<(Vec<Arc<Track>>, bool)> = Selector::new("app.select-tracks");
 /// Spotify is refusing audio keys, downloads continue after this wait.
 pub const DOWNLOAD_PAUSED: Selector<Duration> = Selector::new("app.download-paused");
 /// Tracks saved and tracks that failed, or why the download couldn't start.

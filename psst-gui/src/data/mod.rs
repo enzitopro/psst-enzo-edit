@@ -120,6 +120,8 @@ impl AppState {
             downloaded: HashSet::new(),
             downloading: HashSet::new(),
             offline_playlists: HashMap::new(),
+            downloaded_only: false,
+            selected: HashMap::new(),
         });
         let playback = Playback {
             state: PlaybackState::Stopped,
@@ -198,6 +200,10 @@ impl AppState {
 impl AppState {
     pub fn navigate(&mut self, nav: &Nav) {
         if &self.nav != nav {
+            // A selection is of the page's list.
+            if !self.common_ctx.selected.is_empty() {
+                self.common_ctx_mut().selected.clear();
+            }
             let previous = mem::replace(&mut self.nav, nav.to_owned());
             self.history.push_back(previous);
             self.config.last_route.replace(nav.to_owned());
@@ -731,9 +737,28 @@ pub struct CommonCtx {
     /// Playlists downloaded for offline listening: their track count back then,
     /// and their tracks that can be downloaded (local files can't).
     pub offline_playlists: HashMap<Arc<str>, (usize, Vector<TrackId>)>,
+    /// Playlists show and play only what plays without a connection.
+    pub downloaded_only: bool,
+    /// Tracks picked with Ctrl and Shift clicks, for the selection bar.
+    pub selected: HashMap<TrackId, Arc<Track>>,
 }
 
 impl CommonCtx {
+    /// A Ctrl+click toggles its track, a Shift+click range only adds.
+    pub fn select(&mut self, tracks: &[Arc<Track>], range: bool) {
+        for track in tracks {
+            if !range && self.selected.remove(&track.id).is_some() {
+                continue;
+            }
+            self.selected.insert(track.id, track.clone());
+        }
+    }
+
+    /// Whether `track` plays without a connection.
+    pub fn plays_offline(&self, track: &Track) -> bool {
+        self.downloaded.contains(&track.id) || (track.is_local && !track.is_missing_local_file())
+    }
+
     /// Whether `item` of the list `origin` plays: the same track in another
     /// album or playlist doesn't count.
     pub fn is_playing(&self, item: &Playable, origin: &PlaybackOrigin) -> bool {
@@ -958,6 +983,21 @@ mod tests {
         assert_eq!(edited(QueueEdit::MoveUp(0)), [1, 2, 3, 4]);
         assert_eq!(edited(QueueEdit::MoveDown(3)), [1, 2, 3, 4]);
         assert_eq!(edited(QueueEdit::Remove(9)), [1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn selection_toggles_and_ranges_add() {
+        let mut state = AppState::default_with_config(Config::default());
+        let common = state.common_ctx_mut();
+        common.select(&[track(1)], false);
+        common.select(&[track(1), track(2), track(3)], true);
+        assert_eq!(common.selected.len(), 3);
+        common.select(&[track(2)], false);
+        assert!(!common.selected.contains_key(&track(2).id));
+        assert_eq!(common.selected.len(), 2);
+        // Leaving the page drops it.
+        state.navigate(&Nav::SavedTracks);
+        assert!(state.common_ctx.selected.is_empty());
     }
 
     #[test]

@@ -32,9 +32,9 @@ use crate::{
     cmd,
     data::Nav,
     data::{
-        unix_now, AppState, CommonCtx, Config, Library, NowPlaying, Playable, Playback,
-        PlaybackOrigin, PlaybackPayload, PlaybackState, QueueBehavior, QueueEdit, QueueEntry,
-        SavedPlayback, Track, TrackId,
+        unix_now, AppState, CommonCtx, Config, NowPlaying, Playable, Playback, PlaybackOrigin,
+        PlaybackPayload, PlaybackState, QueueBehavior, QueueEdit, QueueEntry, SavedPlayback, Track,
+        TrackId,
     },
     discord::{DiscordPresence, Presence},
     error::Error,
@@ -44,12 +44,17 @@ use crate::{
 
 /// The payload's items without the hidden tracks, except the one clicked, and
 /// where that one is now.
-fn without_hidden(payload: &PlaybackPayload, library: &Library) -> (Vector<Playable>, usize) {
+fn without_hidden(payload: &PlaybackPayload, common: &CommonCtx) -> (Vector<Playable>, usize) {
     let clicked = payload.items.get(payload.position).map(Playable::id);
+    // "Show Downloaded Only" plays only those too.
+    let downloaded_only =
+        common.downloaded_only && matches!(payload.origin, PlaybackOrigin::Playlist(_));
     let mut position = 0;
     let mut items = Vector::new();
     for (index, item) in payload.items.iter().enumerate() {
-        let hidden = matches!(item, Playable::Track(track) if library.is_hidden(&track.id));
+        let hidden = matches!(item, Playable::Track(track)
+            if common.library.is_hidden(&track.id)
+                || (downloaded_only && !common.plays_offline(track)));
         if index == payload.position {
             position = items.len();
         } else if hidden && Some(item.id()) != clicked {
@@ -788,7 +793,7 @@ where
             }
             Event::Command(cmd) if cmd.is(cmd::PLAY_TRACKS) => {
                 let payload = cmd.get_unchecked(cmd::PLAY_TRACKS);
-                let (items, position) = without_hidden(payload, &data.common_ctx.library);
+                let (items, position) = without_hidden(payload, &data.common_ctx);
                 data.playback.queue = items
                     .into_iter()
                     .map(|item| QueueEntry {
@@ -1023,6 +1028,7 @@ mod tests {
     use psst_core::item_id::{ItemId, ItemIdType};
 
     use super::*;
+    use crate::data::{Library, PlaylistLink};
     use crate::webapi::local_library::{local_track, LocalItem};
 
     fn track(n: u128) -> Playable {
@@ -1039,18 +1045,16 @@ mod tests {
 
     #[test]
     fn hidden_tracks_are_skipped_unless_clicked() {
-        let mut library = Library::default();
-        let hide = |library: &mut Library, n, until| {
-            library
-                .hidden_tracks
-                .insert(TrackId(ItemId::new(n, ItemIdType::Track)), until);
-        };
-        hide(&mut library, 1, None);
-        hide(&mut library, 3, Some(unix_now() + 60));
-        // Over already, so it plays.
-        hide(&mut library, 4, Some(unix_now() - 60));
-        let payload = |position| PlaybackPayload {
-            origin: PlaybackOrigin::Library,
+        let mut state = AppState::default_with_config(Config::default());
+        let id = |n| TrackId(ItemId::new(n, ItemIdType::Track));
+        state.with_library_mut(|library| {
+            library.hidden_tracks.insert(id(1), None);
+            library.hidden_tracks.insert(id(3), Some(unix_now() + 60));
+            // Over already, so it plays.
+            library.hidden_tracks.insert(id(4), Some(unix_now() - 60));
+        });
+        let payload = |origin, position| PlaybackPayload {
+            origin,
             items: (0..5).map(track).collect(),
             position,
         };
@@ -1058,15 +1062,28 @@ mod tests {
             let ids: Vec<u128> = items.iter().map(|item| item.id().id).collect();
             (ids, position)
         };
-        assert_eq!(
-            ids(without_hidden(&payload(2), &library)),
-            (vec![0, 2, 4], 1)
-        );
+        let library = |position| payload(PlaybackOrigin::Library, position);
+        let common = &state.common_ctx;
+        assert_eq!(ids(without_hidden(&library(2), common)), (vec![0, 2, 4], 1));
         // Clicked, a hidden track plays anyway.
         assert_eq!(
-            ids(without_hidden(&payload(3), &library)),
+            ids(without_hidden(&library(3), common)),
             (vec![0, 2, 3, 4], 2)
         );
+
+        // "Show Downloaded Only" plays a playlist's downloaded tracks only.
+        let common = state.common_ctx_mut();
+        common.downloaded_only = true;
+        common.downloaded.insert(id(2));
+        let link = PlaylistLink {
+            id: "p".into(),
+            name: "P".into(),
+        };
+        let playlist = payload(PlaybackOrigin::Playlist(link), 2);
+        let common = &state.common_ctx;
+        assert_eq!(ids(without_hidden(&playlist, common)), (vec![2], 0));
+        // Other lists play as before.
+        assert_eq!(ids(without_hidden(&library(2), common)), (vec![0, 2, 4], 1));
     }
 
     #[test]
