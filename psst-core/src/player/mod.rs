@@ -105,6 +105,7 @@ impl Player {
             PlayerEvent::Position { position, path } => self.handle_position(position, path),
             PlayerEvent::EndOfTrack => self.handle_end_of_track(),
             PlayerEvent::Loading { .. }
+            | PlayerEvent::Upcoming { .. }
             | PlayerEvent::LoadingFailed { .. }
             | PlayerEvent::Downloaded { .. }
             | PlayerEvent::ItemDownloaded { .. }
@@ -153,8 +154,18 @@ impl Player {
             PlayerCommand::Stop => self.stop(),
             PlayerCommand::Seek { position } => self.seek(position),
             PlayerCommand::Configure { config } => self.configure(config),
-            PlayerCommand::SetQueueBehavior { behavior } => self.queue.set_behaviour(behavior),
-            PlayerCommand::AddToQueue { item } => self.queue.add(item),
+            PlayerCommand::SetQueueBehavior { behavior } => {
+                self.queue.set_behaviour(behavior);
+                self.report_upcoming();
+            }
+            PlayerCommand::AddToQueue { item } => {
+                self.queue.add(item);
+                self.report_upcoming();
+            }
+            PlayerCommand::SetUpcoming { items } => {
+                self.queue.set_upcoming(items);
+                self.report_upcoming();
+            }
             PlayerCommand::SetVolume { volume } => self.set_volume(volume),
         }
     }
@@ -289,10 +300,17 @@ impl Player {
         }
     }
 
+    /// Tells what plays next, for showing the queue.
+    fn report_upcoming(&self) {
+        let upcoming = self.queue.upcoming().iter().map(|item| item.item_id).collect();
+        let _ = self.sender.send(PlayerEvent::Upcoming { items: upcoming });
+    }
+
     fn load_and_play(&mut self, item: PlaybackItem) {
         // Make sure to stop the sink, so any current audio source is cleared and the
         // playback stopped.
         self.audio_output_sink.stop();
+        self.report_upcoming();
 
         // Check if the item is already in the preloader state.
         let loading_handle = match mem::replace(&mut self.preload, PreloadState::None) {
@@ -475,6 +493,7 @@ impl Player {
         self.audio_output_sink.stop();
         self.state = PlayerState::Stopped;
         self.queue.clear();
+        self.report_upcoming();
         self.consecutive_loading_failures = 0;
     }
 
@@ -604,6 +623,10 @@ pub enum PlayerCommand {
     AddToQueue {
         item: PlaybackItem,
     },
+    /// Replaces what plays after the current track, as edited in the queue.
+    SetUpcoming {
+        items: Vec<PlaybackItem>,
+    },
     /// Change playback volume to a value in 0.0..=1.0 range.
     SetVolume {
         volume: f64,
@@ -678,6 +701,10 @@ pub enum PlayerEvent {
     EndOfTrack,
     /// The queue is empty.
     Stopped,
+    /// What plays after the current track changed (or the track did).
+    Upcoming {
+        items: Vec<ItemId>,
+    },
 }
 
 enum PlayerState {

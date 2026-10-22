@@ -122,7 +122,10 @@ fn playing_item_widget() -> impl Widget<NowPlaying> {
         .with_child(ViewSwitcher::new(
             |now_playing: &NowPlaying, _| {
                 // Local files can't be saved to the library.
-                now_playing.item.track().is_some_and(|track| !track.is_local)
+                now_playing
+                    .item
+                    .track()
+                    .is_some_and(|track| !track.is_local)
                     && now_playing.library.saved_tracks.is_resolved()
             },
             |selector, _data, _env| match selector {
@@ -214,6 +217,11 @@ fn player_widget() -> impl Widget<Playback> {
                         ctx.submit_command(cmd::TOGGLE_LYRICS_WINDOW);
                     },
                 ))
+                .with_child(
+                    small_button_widget(&icons::PLAYLIST).on_left_click(|ctx, _, _, _| {
+                        ctx.submit_command(cmd::TOGGLE_QUEUE);
+                    }),
+                )
                 .align_right(),
         )
         .padding(theme::grid(2.0))
@@ -425,9 +433,7 @@ impl Widget<NowPlaying> for SeekBar {
                     ctx.set_active(true);
                 }
             }
-            Event::MouseUp(mouse)
-                if ctx.is_active() && mouse.button == MouseButton::Left =>
-            {
+            Event::MouseUp(mouse) if ctx.is_active() && mouse.button == MouseButton::Left => {
                 if ctx.is_hot() {
                     let fraction = mouse.pos.x / ctx.size().width;
                     ctx.submit_command(cmd::PLAY_SEEK.with(fraction));

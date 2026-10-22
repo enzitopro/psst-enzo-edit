@@ -39,8 +39,8 @@ pub use crate::data::{
         Artist, ArtistAlbums, ArtistDetail, ArtistInfo, ArtistLink, ArtistOverview, ArtistStats,
     },
     config::{
-        AudioQuality, Authentication, Config, Preferences, PreferencesTab, SortCriteria,
-        SortOrder, Theme,
+        AudioQuality, Authentication, Config, Preferences, PreferencesTab, SortCriteria, SortOrder,
+        Theme,
     },
     ctx::Ctx,
     find::{FindQuery, Finder, MatchFindQuery},
@@ -48,7 +48,7 @@ pub use crate::data::{
     nav::{Nav, Route, SpotifyUrl},
     playback::{
         NowPlaying, Playable, PlayableMatcher, Playback, PlaybackOrigin, PlaybackPayload,
-        PlaybackState, QueueBehavior, QueueEntry, SavedPlayback,
+        PlaybackState, QueueBehavior, QueueEdit, QueueEntry, SavedPlayback,
     },
     playlist::{
         Playlist, PlaylistAddTrack, PlaylistDetail, PlaylistLink, PlaylistRemoveTrack,
@@ -90,6 +90,8 @@ pub struct AppState {
     pub lyrics_search: LyricsSearch,
     /// The small lyrics panel over the main window.
     pub lyrics_panel_open: bool,
+    /// The queue next to the page.
+    pub queue_panel_open: bool,
     pub credits: Option<TrackCredits>,
     /// Offline downloads still to do, in download order, and how many were
     /// queued since the queue was last empty.
@@ -121,6 +123,8 @@ impl AppState {
             now_playing: None,
             queue_behavior: config.queue_behavior,
             queue: Vector::new(),
+            upcoming: Vector::new(),
+            history: Vector::new(),
             volume: config.volume,
         };
         Self {
@@ -179,6 +183,7 @@ impl AppState {
             lyrics: Promise::Empty,
             lyrics_search: LyricsSearch::default(),
             lyrics_panel_open: false,
+            queue_panel_open: false,
             credits: None,
             download_queue: Vector::new(),
             download_total: 0,
@@ -860,6 +865,28 @@ mod tests {
         // Nothing playing, nothing to keep.
         state.playback.now_playing = None;
         assert!(SavedPlayback::of(&state.playback).is_none());
+    }
+
+    #[test]
+    fn queue_edits_move_remove_and_skip_ahead() {
+        let upcoming: Vector<QueueEntry> = (1..=4)
+            .map(|n| QueueEntry {
+                item: Playable::Track(track(n)),
+                origin: PlaybackOrigin::Library,
+            })
+            .collect();
+        let edited = |edit: QueueEdit| -> Vec<u128> {
+            let edited = edit.apply(upcoming.clone());
+            edited.iter().map(|entry| entry.item.id().id).collect()
+        };
+        assert_eq!(edited(QueueEdit::MoveUp(2)), [1, 3, 2, 4]);
+        assert_eq!(edited(QueueEdit::MoveDown(0)), [2, 1, 3, 4]);
+        assert_eq!(edited(QueueEdit::Remove(1)), [1, 3, 4]);
+        assert_eq!(edited(QueueEdit::PlayNow(2)), [3, 4]);
+        // Off the ends, nothing changes.
+        assert_eq!(edited(QueueEdit::MoveUp(0)), [1, 2, 3, 4]);
+        assert_eq!(edited(QueueEdit::MoveDown(3)), [1, 2, 3, 4]);
+        assert_eq!(edited(QueueEdit::Remove(9)), [1, 2, 3, 4]);
     }
 
     #[test]

@@ -20,7 +20,43 @@ pub struct Playback {
     pub now_playing: Option<NowPlaying>,
     pub queue_behavior: QueueBehavior,
     pub queue: Vector<QueueEntry>,
+    /// What plays after the current item, in order, as the player tells.
+    pub upcoming: Vector<QueueEntry>,
+    /// What played before the current item this session, newest first.
+    pub history: Vector<QueueEntry>,
     pub volume: f64,
+}
+
+/// A change to what plays next, by position in `Playback::upcoming`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum QueueEdit {
+    PlayNow(usize),
+    MoveUp(usize),
+    MoveDown(usize),
+    Remove(usize),
+}
+
+impl QueueEdit {
+    /// `upcoming` after the edit.  Playing an item now drops the ones before it.
+    pub fn apply(self, mut upcoming: Vector<QueueEntry>) -> Vector<QueueEntry> {
+        let len = upcoming.len();
+        match self {
+            QueueEdit::PlayNow(i) if i < len => upcoming.slice(i..),
+            QueueEdit::MoveUp(i) if i > 0 && i < len => {
+                upcoming.swap(i - 1, i);
+                upcoming
+            }
+            QueueEdit::MoveDown(i) if i + 1 < len => {
+                upcoming.swap(i, i + 1);
+                upcoming
+            }
+            QueueEdit::Remove(i) if i < len => {
+                upcoming.remove(i);
+                upcoming
+            }
+            _ => upcoming,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Data, Lens)]

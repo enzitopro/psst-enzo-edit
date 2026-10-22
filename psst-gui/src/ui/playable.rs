@@ -13,7 +13,8 @@ use crate::{
     cmd,
     data::{
         AppState, CommonCtx, FindQuery, MatchFindQuery, Playable, PlaybackOrigin, PlaybackPayload,
-        PlaylistTracks, QueueBehavior, SavedTracks, SearchResults, ShowEpisodes, Track, WithCtx,
+        PlaylistTracks, QueueBehavior, QueueEntry, SavedTracks, SearchResults, ShowEpisodes, Track,
+        WithCtx,
     },
     ui::theme,
     widget::{icons, MyWidgetExt},
@@ -50,7 +51,7 @@ where
     )
 }
 
-fn playable_widget(display: Display) -> impl Widget<PlayRow<Playable>> {
+pub fn playable_widget(display: Display) -> impl Widget<PlayRow<Playable>> {
     // The `List` reuses row widgets by index, so when the tracks are sorted a
     // row gets another track.  The lenses must read the row's current item,
     // the one captured at construction is only a fallback for the moment the
@@ -153,6 +154,23 @@ impl PlayableIter for Vector<Arc<Track>> {
     fn for_each(&self, mut cb: impl FnMut(Playable, usize)) {
         for (position, track) in self.iter().enumerate() {
             cb(Playable::Track(track.to_owned()), position);
+        }
+    }
+
+    fn count(&self) -> usize {
+        self.len()
+    }
+}
+
+/// The queue's items.  Played again from the queue, they count as from Home.
+impl PlayableIter for Vector<QueueEntry> {
+    fn origin(&self) -> PlaybackOrigin {
+        PlaybackOrigin::Home
+    }
+
+    fn for_each(&self, mut cb: impl FnMut(Playable, usize)) {
+        for (position, entry) in self.iter().enumerate() {
+            cb(entry.item.clone(), position);
         }
     }
 

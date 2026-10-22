@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     sync::Arc,
     thread::{self, JoinHandle},
     time::Duration,
@@ -31,13 +32,16 @@ use crate::{
     data::Nav,
     data::{
         AppState, Config, NowPlaying, Playable, Playback, PlaybackOrigin, PlaybackState,
-        QueueBehavior, QueueEntry, SavedPlayback, Track, TrackId,
+        QueueBehavior, QueueEdit, QueueEntry, SavedPlayback, Track, TrackId,
     },
     discord::{DiscordPresence, Presence},
     error::Error,
     ui::lyrics,
     webapi::WebApi,
 };
+
+/// How many played tracks the queue shows.
+const MAX_HISTORY: usize = 50;
 
 /// Loads the queue of the last session, paused where it was.
 const RESTORE_PLAYBACK: Selector = Selector::new("app.playback.restore");
@@ -172,6 +176,11 @@ impl PlaybackController {
                 PlayerEvent::Stopped => {
                     event_sink
                         .submit_command(cmd::PLAYBACK_STOPPED, (), widget_id)
+                        .unwrap();
+                }
+                PlayerEvent::Upcoming { items } => {
+                    event_sink
+                        .submit_command(cmd::PLAYBACK_UPCOMING, items.clone(), widget_id)
                         .unwrap();
                 }
                 PlayerEvent::ItemDownloaded { item_id, ok } => {
@@ -553,6 +562,16 @@ where
                 self.report_now_playing(&data.playback);
 
                 if let Some(queued) = data.queued_entry(*item) {
+                    if let Some(previous) = data.playback.now_playing.as_ref() {
+                        if previous.item.id() != queued.item.id() {
+                            let played = QueueEntry {
+                                item: previous.item.clone(),
+                                origin: previous.origin.clone(),
+                            };
+                            data.playback.history.push_front(played);
+                            data.playback.history.truncate(MAX_HISTORY);
+                        }
+                    }
                     data.start_playback(queued.item, queued.origin, progress.to_owned());
                     self.update_media_control_playback(&data.playback);
                     self.update_media_control_metadata(&data.playback);
@@ -681,6 +700,31 @@ where
                         "Downloaded {downloaded} tracks, {failed} failed (download again to retry them)"
                     )),
                     Err(err) => data.error_alert(format!("Couldn't download: {err}")),
+                }
+                ctx.set_handled();
+            }
+            Event::Command(cmd) if cmd.is(cmd::PLAYBACK_UPCOMING) => {
+                let ids = cmd.get_unchecked(cmd::PLAYBACK_UPCOMING);
+                let known: HashMap<_, _> = data
+                    .playback
+                    .queue
+                    .iter()
+                    .chain(data.added_queue.iter())
+                    .map(|entry| (entry.item.id(), entry.clone()))
+                    .collect();
+                data.playback.upcoming =
+                    ids.iter().filter_map(|id| known.get(id).cloned()).collect();
+                ctx.set_handled();
+            }
+            Event::Command(cmd) if cmd.is(cmd::EDIT_QUEUE) => {
+                let edit = *cmd.get_unchecked(cmd::EDIT_QUEUE);
+                let upcoming = edit.apply(data.playback.upcoming.clone());
+                self.send(PlayerEvent::Command(PlayerCommand::SetUpcoming {
+                    items: Self::playback_items(&upcoming),
+                }));
+                data.playback.upcoming = upcoming;
+                if let QueueEdit::PlayNow(_) = edit {
+                    self.next();
                 }
                 ctx.set_handled();
             }
