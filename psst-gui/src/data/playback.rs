@@ -20,7 +20,65 @@ pub struct Playback {
     pub now_playing: Option<NowPlaying>,
     pub queue_behavior: QueueBehavior,
     pub queue: Vector<QueueEntry>,
+    /// What plays after the current item, in order, as the player tells.
+    pub upcoming: Vector<QueueEntry>,
+    /// What played before the current item this session, newest first.
+    pub history: Vector<QueueEntry>,
     pub volume: f64,
+}
+
+impl Playback {
+    /// Moves what played into `history` as `next` starts, unless it's the same
+    /// item again (repeat one).
+    pub fn remember_played(&mut self, next: &Playable) {
+        const MAX_HISTORY: usize = 50;
+        let Some(played) = &self.now_playing else {
+            return;
+        };
+        if played.item.id() == next.id() {
+            return;
+        }
+        self.history.push_front(QueueEntry {
+            item: played.item.clone(),
+            origin: played.origin.clone(),
+        });
+        // `truncate` past the end panics.
+        if self.history.len() > MAX_HISTORY {
+            self.history.truncate(MAX_HISTORY);
+        }
+    }
+}
+
+/// A change to what plays next, by position in `Playback::upcoming`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum QueueEdit {
+    PlayNow(usize),
+    MoveUp(usize),
+    MoveDown(usize),
+    Remove(usize),
+}
+
+impl QueueEdit {
+    /// `upcoming` after the edit.  Playing an item now drops the ones before it.
+    pub fn apply(self, mut upcoming: Vector<QueueEntry>) -> Vector<QueueEntry> {
+        let len = upcoming.len();
+        match self {
+            QueueEdit::PlayNow(i) if i < len => upcoming.slice(i..),
+            QueueEdit::MoveUp(i) if i > 0 && i < len => {
+                upcoming.swap(i - 1, i);
+                upcoming
+            }
+            QueueEdit::MoveDown(i) if i + 1 < len => {
+                upcoming.swap(i, i + 1);
+                upcoming
+            }
+            QueueEdit::Remove(i) if i < len => {
+                upcoming.remove(i);
+                upcoming
+            }
+            _ => upcoming,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Data, Lens)]

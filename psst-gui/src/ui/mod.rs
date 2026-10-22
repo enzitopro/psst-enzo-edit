@@ -44,6 +44,7 @@ pub mod playable;
 pub mod playback;
 pub mod playlist;
 pub mod preferences;
+pub mod queue;
 pub mod search;
 pub mod show;
 pub mod theme;
@@ -225,10 +226,21 @@ fn root_widget() -> impl Widget<AppState> {
         .cross_axis_alignment(CrossAxisAlignment::Start)
         .with_child(topbar)
         .with_flex_child(
-            Overlay::bottom(
-                CornerOverlay::new(route_widget(), lyrics::lyrics_panel(), theme::grid(2.0)),
-                alert_widget(),
-            ),
+            Flex::row()
+                .must_fill_main_axis(true)
+                .cross_axis_alignment(CrossAxisAlignment::Fill)
+                .with_flex_child(
+                    Overlay::bottom(
+                        CornerOverlay::new(
+                            route_widget(),
+                            lyrics::lyrics_panel(),
+                            theme::grid(2.0),
+                        ),
+                        alert_widget(),
+                    ),
+                    1.0,
+                )
+                .with_child(queue::panel_widget()),
             1.0,
         )
         .with_child(playback::panel_widget())

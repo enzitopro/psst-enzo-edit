@@ -7,7 +7,7 @@ use std::time::Duration;
 use crate::{
     data::{
         config::LocalScanRequest, AlbumLink, Nav, PlaybackPayload, PlaylistLink, QueueBehavior,
-        QueueEntry,
+        QueueEdit, QueueEntry,
     },
     ui::find::Find,
 };
@@ -51,6 +51,11 @@ pub const PLAYBACK_PAUSING: Selector = Selector::new("app.playback-pausing");
 pub const PLAYBACK_RESUMING: Selector = Selector::new("app.playback-resuming");
 pub const PLAYBACK_BLOCKED: Selector = Selector::new("app.playback-blocked");
 pub const PLAYBACK_STOPPED: Selector = Selector::new("app.playback-stopped");
+/// What plays after the current track, in order.
+pub const PLAYBACK_UPCOMING: Selector<Vec<ItemId>> = Selector::new("app.playback-upcoming");
+/// Shows or hides the queue next to the page.
+pub const TOGGLE_QUEUE: Selector = Selector::new("app.toggle-queue");
+pub const EDIT_QUEUE: Selector<QueueEdit> = Selector::new("app.edit-queue");
 /// A track failed to load and was skipped, with the reason.
 pub const PLAYBACK_SKIPPED: Selector<(ItemId, String)> = Selector::new("app.playback-skipped");
 

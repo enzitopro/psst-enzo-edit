@@ -105,6 +105,30 @@ impl Queue {
         self.position = self.following_position();
     }
 
+    /// What plays after the current item, in order: the user's picks first.
+    pub fn upcoming(&self) -> Vec<PlaybackItem> {
+        let picks = self.user_items[self.user_items_position..].iter().copied();
+        let rest = self.positions[(self.position + 1).min(self.positions.len())..]
+            .iter()
+            .map(|&position| self.items[position]);
+        picks.chain(rest).collect()
+    }
+
+    /// Replaces what plays after the current item, which keeps playing.  What
+    /// played before stays for skipping back, and the user's picks are part of
+    /// `upcoming` now.
+    pub fn set_upcoming(&mut self, upcoming: Vec<PlaybackItem>) {
+        if self.get_current().is_none() {
+            return;
+        }
+        let played = self.positions[..=self.position].iter();
+        let played: Vec<_> = played.map(|&position| self.items[position]).collect();
+        self.items = played.into_iter().chain(upcoming).collect();
+        self.positions = (0..self.items.len()).collect();
+        self.user_items.clear();
+        self.user_items_position = 0;
+    }
+
     pub fn get_current(&self) -> Option<&PlaybackItem> {
         let position = self.positions.get(self.position).copied()?;
         self.items.get(position)
@@ -201,6 +225,36 @@ mod tests {
         queue.skip_to_following();
         assert_eq!(current(&queue), 9);
         assert_eq!(queue.get_following().unwrap().item_id.id, 2);
+    }
+
+    #[test]
+    fn upcoming_can_be_edited_while_the_current_track_plays() {
+        let ids = |items: Vec<PlaybackItem>| items.iter().map(|i| i.item_id.id).collect::<Vec<_>>();
+        let mut queue = Queue::new();
+        queue.fill(items(5), 1);
+        queue.add(items(9)[8]);
+        assert_eq!(ids(queue.upcoming()), [9, 3, 4, 5]);
+
+        let all = items(9);
+        queue.set_upcoming(vec![all[4], all[8]]);
+        assert_eq!(current(&queue), 2);
+        assert_eq!(ids(queue.upcoming()), [5, 9]);
+        queue.skip_to_next();
+        assert_eq!(current(&queue), 5);
+        queue.skip_to_previous();
+        assert_eq!(current(&queue), 2);
+
+        // Shuffled, the edited order is the order.
+        queue.set_behaviour(QueueBehavior::Random);
+        queue.set_upcoming(vec![all[6], all[7]]);
+        assert_eq!(ids(queue.upcoming()), [7, 8]);
+        queue.skip_to_next();
+        assert_eq!(current(&queue), 7);
+
+        // Nothing playing, nothing to edit.
+        let mut empty = Queue::new();
+        empty.set_upcoming(vec![all[0]]);
+        assert!(empty.get_current().is_none() && empty.upcoming().is_empty());
     }
 
     #[test]
