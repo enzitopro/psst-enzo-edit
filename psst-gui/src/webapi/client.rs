@@ -1889,6 +1889,85 @@ impl WebApi {
         }
     }
 
+    /// The URIs of the user's rootlist, the library's own order ("Custom
+    /// Order"), and its revision.
+    pub(super) fn rootlist(&self, user: &str) -> Result<(Vec<String>, Vec<u8>), Error> {
+        use librespot_protocol::playlist4_external::SelectedListContent;
+        use protobuf::Message;
+
+        let request = &RequestBuilder::new(
+            format!("playlist/v2/user/{user}/rootlist"),
+            Method::Get,
+            None,
+        )
+        .set_base_uri("spclient.wg.spotify.com")
+        .query("decorate", "revision")
+        .query("from", 0)
+        .query("length", 10_000)
+        .partner_auth();
+        let response = Self::with_retry(|| self.request(request))?;
+        let mut body = Vec::new();
+        response.into_body().into_reader().read_to_end(&mut body)?;
+        let list = SelectedListContent::parse_from_bytes(&body)
+            .map_err(|err| Error::WebApiError(format!("rootlist: {err}")))?;
+        let uris = list
+            .contents
+            .items
+            .iter()
+            .map(|item| item.uri().to_string());
+        Ok((uris.collect(), list.revision().to_vec()))
+    }
+
+    /// Moves `uri` in the library's own order, right before or after `anchor`.
+    pub fn move_in_rootlist(
+        &self,
+        user: &str,
+        uri: &str,
+        anchor: &str,
+        before: bool,
+    ) -> Result<(), Error> {
+        use librespot_protocol::playlist4_external::{op, Delta, ListChanges, Mov, Op};
+        use protobuf::{Message, MessageField};
+
+        let (uris, revision) = self.rootlist(user)?;
+        let index = |uri: &str| {
+            uris.iter()
+                .position(|item| item == uri)
+                .ok_or_else(|| Error::WebApiError(format!("{uri} isn't in the library")))
+        };
+        let mut mov = Mov::new();
+        mov.set_from_index(index(uri)? as i32);
+        mov.set_length(1);
+        // The index to insert at, counted before the move.
+        let to = index(anchor)? + usize::from(!before);
+        mov.set_to_index(to as i32);
+        let mut op = Op::new();
+        op.set_kind(op::Kind::MOV);
+        op.mov = MessageField::some(mov);
+        let mut delta = Delta::new();
+        delta.ops.push(op);
+        let mut changes = ListChanges::new();
+        changes.set_base_revision(revision);
+        changes.deltas.push(delta);
+        let body = changes
+            .write_to_bytes()
+            .map_err(|err| Error::WebApiError(format!("rootlist change: {err}")))?;
+
+        let (bearer, client_token) = self.partner_token()?;
+        let url =
+            format!("https://spclient.wg.spotify.com/playlist/v2/user/{user}/rootlist/changes");
+        Self::with_retry(|| {
+            self.agent
+                .post(&url)
+                .header("Authorization", &format!("Bearer {bearer}"))
+                .header("client-token", &client_token)
+                .header("Content-Type", "application/x-protobuf")
+                .send(&body[..])
+                .map_err(|err| Error::WebApiError(err.to_string()))
+        })?;
+        Ok(())
+    }
+
     // https://developer.spotify.com/documentation/web-api/reference/get-a-list-of-current-users-playlists
     fn get_web_api_playlists(&self) -> Result<Vector<Playlist>, Error> {
         let request = &RequestBuilder::new("v1/me/playlists", Method::Get, None);

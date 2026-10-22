@@ -1144,3 +1144,26 @@ fn diagnostics_offline_copies() {
         tracks.len()
     );
 }
+
+/// Moves a playlist one place down in the library's own order, and back.
+#[test]
+#[ignore]
+fn diagnostics_rootlist_move() {
+    let mut config = Config::load().expect("Psst config not found, log in first");
+    init(&mut config);
+    let api = WebApi::global();
+    let user = api.get_user_profile().expect("profile").id;
+    let (before, _) = api.rootlist(&user).expect("rootlist");
+    println!("{} items, from 3: {:?}", before.len(), &before[3..6]);
+    // Item 3 before item 5: one place down.
+    api.move_in_rootlist(&user, &before[3], &before[4], false).expect("move down");
+    let (moved, _) = api.rootlist(&user).expect("rootlist");
+    println!("after the move, from 3: {:?}", &moved[3..6]);
+    // Back before the item now at 3, where it was.
+    api.move_in_rootlist(&user, &before[3], &moved[3], true).expect("move back");
+    let (restored, _) = api.rootlist(&user).expect("rootlist");
+    println!("restored, from 3: {:?}", &restored[3..6]);
+    assert_eq!(moved[3], before[4]);
+    assert_eq!(moved[4], before[3]);
+    assert_eq!(restored, before);
+}

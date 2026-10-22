@@ -11,7 +11,7 @@ use crate::{
     cmd,
     data::{
         sort_tracks, AppState, Ctx, Library, Nav, Playlist, PlaylistAddTrack, PlaylistDetail,
-        PlaylistLink, PlaylistRemoveTrack, PlaylistTracks, WithCtx,
+        PlaylistLink, PlaylistRemoveTrack, PlaylistTracks, WithCtx, CUSTOM_ORDER,
     },
     error::Error,
     webapi::WebApi,
@@ -23,6 +23,11 @@ use super::{library, playable, theme, track, utils};
 /// Loads the sidebar's playlists, in a library sort order.
 pub const LOAD_LIST: Selector<String> = Selector::new("app.playlist.load-list");
 const SORT_LIST: Selector<String> = Selector::new("app.playlist.sort-list");
+/// Moves a playlist up (`true`) or down a place in the library's own order.
+const MOVE_PLAYLIST: Selector<(PlaylistLink, bool)> = Selector::new("app.playlist.move");
+/// The user, the playlist's URI, and the one to put it before (`true`) or after.
+const MOVE_IN_ROOTLIST: Selector<(Arc<str>, String, String, bool)> =
+    Selector::new("app.playlist.move-in-rootlist");
 
 /// The library's sort orders, as Spotify names them.
 const ORDERS: [&str; 5] = [
@@ -30,7 +35,7 @@ const ORDERS: [&str; 5] = [
     "Recently Added",
     "Alphabetical",
     "Creator",
-    "Custom Order",
+    CUSTOM_ORDER,
 ];
 pub const LOAD_DETAIL: Selector<(PlaylistLink, AppState)> =
     Selector::new("app.playlist.load-detail");
@@ -70,6 +75,7 @@ pub fn sort_widget() -> impl Widget<AppState> {
         })
         .on_command(SORT_LIST, |ctx, order, data| {
             data.config.playlist_order = order.clone();
+            data.common_ctx_mut().playlists_in_custom_order = order == CUSTOM_ORDER;
             ctx.submit_command(LOAD_LIST.with(order.clone()));
         })
         .align_left()
@@ -194,6 +200,43 @@ pub fn list_widget() -> impl Widget<AppState> {
         let window = unfollow_confirm_window(msg.clone());
         ctx.new_window(window);
     })
+    .on_command(MOVE_PLAYLIST, |ctx, (link, up), data: &mut AppState| {
+        let user = data
+            .library
+            .user_profile
+            .resolved()
+            .map(|user| user.id.clone());
+        let playlists = data.library.playlists.resolved();
+        let (Some(user), Some(playlists)) = (user, playlists) else {
+            return;
+        };
+        // Pinned ones stay on top, the others move among themselves.
+        let movable: Vec<_> = playlists.iter().filter(|p| !p.pinned).collect();
+        let Some(index) = movable.iter().position(|p| p.id == link.id) else {
+            return;
+        };
+        let neighbour = if *up {
+            index.checked_sub(1).and_then(|i| movable.get(i))
+        } else {
+            movable.get(index + 1)
+        };
+        if let Some(neighbour) = neighbour {
+            let uri = |id: &str| format!("spotify:playlist:{id}");
+            let target = (user, uri(&link.id), uri(&neighbour.id), *up);
+            ctx.submit_command(MOVE_IN_ROOTLIST.with(target));
+        }
+    })
+    .on_command_async(
+        MOVE_IN_ROOTLIST,
+        |(user, uri, anchor, before)| {
+            WebApi::global().move_in_rootlist(&user, &uri, &anchor, before)
+        },
+        |_, _, _| {},
+        |ctx, data, (_, result)| match result {
+            Ok(()) => ctx.submit_command(LOAD_LIST.with(CUSTOM_ORDER.to_string())),
+            Err(err) => data.error_alert(format!("Couldn't move the playlist: {err}")),
+        },
+    )
     .on_command(SHOW_RENAME_PLAYLIST_CONFIRM, |ctx, link, _| {
         let window = rename_playlist_window(link.clone());
         ctx.new_window(window);
@@ -624,9 +667,18 @@ fn tracks_widget() -> impl Widget<WithCtx<PlaylistTracks>> {
 
 fn playlist_menu_ctx(playlist: &WithCtx<Playlist>) -> Menu<AppState> {
     let library = &playlist.ctx.library;
+    let custom_order = playlist.ctx.playlists_in_custom_order;
     let playlist = &playlist.data;
 
     let mut menu = Menu::empty();
+
+    // Only in the library's own order, which Spotify keeps.
+    if custom_order && !playlist.pinned && library.contains_playlist(playlist) {
+        menu = menu
+            .entry(MenuItem::new("Move Up").command(MOVE_PLAYLIST.with((playlist.link(), true))))
+            .entry(MenuItem::new("Move Down").command(MOVE_PLAYLIST.with((playlist.link(), false))))
+            .separator();
+    }
 
     menu = menu.entry(
         MenuItem::new(

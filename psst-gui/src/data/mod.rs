@@ -121,6 +121,7 @@ impl AppState {
             downloading: HashSet::new(),
             offline_playlists: HashMap::new(),
             downloaded_only: false,
+            playlists_in_custom_order: config.playlist_order == CUSTOM_ORDER,
             selected: HashMap::new(),
         });
         let playback = Playback {
@@ -459,6 +460,9 @@ pub struct Library {
     pub hidden_tracks: HashMap<TrackId, Option<u64>>,
 }
 
+/// The library's own order, which the user arranges.
+pub const CUSTOM_ORDER: &str = "Custom Order";
+
 /// Seconds since 1970, as the hidden tracks keep their time.
 pub fn unix_now() -> u64 {
     SystemTime::now()
@@ -739,6 +743,8 @@ pub struct CommonCtx {
     pub offline_playlists: HashMap<Arc<str>, (usize, Vector<TrackId>)>,
     /// Playlists show and play only what plays without a connection.
     pub downloaded_only: bool,
+    /// The sidebar's playlists are in the library's own order, to rearrange.
+    pub playlists_in_custom_order: bool,
     /// Tracks picked with Ctrl and Shift clicks, for the selection bar.
     pub selected: HashMap<TrackId, Arc<Track>>,
 }
