@@ -9,13 +9,13 @@ use druid::{
 use crate::{
     cmd,
     data::{
-        Album, AlbumLink, AppState, Ctx, Library, Nav, PlaylistLink, Promise, SavedAlbums,
-        SavedTracks, Show, ShowLink, Track, TrackId,
+        Album, AlbumLink, AppState, Artist, CommonCtx, Ctx, Library, Nav, PlaylistLink, Promise,
+        SavedAlbums, SavedTracks, Show, ShowLink, Track, TrackId, WithCtx,
     },
     error::Error,
     ui::home::{shows_that_you_might_like, your_shows},
     webapi::WebApi,
-    widget::{Async, Empty, MyWidgetExt, Wrap},
+    widget::{Async, CornerOverlay, Empty, MyWidgetExt, Wrap},
 };
 
 use super::{album, artist, playable, theme, track, utils};
@@ -70,20 +70,33 @@ pub fn saved_tracks_widget() -> impl Widget<AppState> {
 /// their saved songs.
 pub fn followed_artists_widget() -> impl Widget<AppState> {
     let artists = |grid: bool| {
+        // Marked when the saved songs were downloaded from the artist's page.
+        let row = move || {
+            let offline = utils::offline_icon(|artist: &WithCtx<Artist>| {
+                let key = CommonCtx::offline_key(&artist.data.link());
+                artist.ctx.offline_state(&key, None)
+            });
+            let card = artist::artist_widget(grid, Nav::ArtistSavedTracks).lens(Ctx::data());
+            CornerOverlay::new(card, offline, theme::grid(1.0))
+        };
         Async::new(
             utils::spinner_widget,
             move || {
                 if grid {
-                    Wrap::new(|| artist::artist_widget(true, Nav::ArtistSavedTracks))
-                        .with_spacing(theme::grid(1.0))
-                        .boxed()
+                    Wrap::new(row).with_spacing(theme::grid(1.0)).boxed()
                 } else {
-                    List::new(|| artist::artist_widget(false, Nav::ArtistSavedTracks)).boxed()
+                    List::new(row).boxed()
                 }
             },
             utils::error_widget,
         )
-        .lens(AppState::library.then(Library::followed_artists.in_arc()))
+        .lens(
+            Ctx::make(
+                AppState::common_ctx,
+                AppState::library.then(Library::followed_artists.in_arc()),
+            )
+            .then(Ctx::in_promise()),
+        )
     };
     let toggle = Label::dynamic(|data: &AppState, _| {
         if data.config.artists_grid {

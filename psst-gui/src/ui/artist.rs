@@ -11,7 +11,7 @@ use crate::{
     cmd,
     data::{
         AppState, Artist, ArtistAlbums, ArtistDetail, ArtistInfo, ArtistLink, ArtistOverview,
-        Cached, Ctx, Nav, WithCtx,
+        Cached, CommonCtx, Ctx, Nav, WithCtx,
     },
     ui::utils::{stat_row, InfoLayout},
     webapi::WebApi,
@@ -69,6 +69,14 @@ pub fn saved_tracks_page() -> impl Widget<AppState> {
             move |ctx, data: &mut AppState, _| {
                 if let Some(artist) = artist(data) {
                     let tracks = data.artist_detail.saved_tracks.clone();
+                    // Remembered like a playlist, for the mark on the Artists page.
+                    let ids = tracks
+                        .iter()
+                        .filter(|t| !t.is_local)
+                        .map(|t| t.id)
+                        .collect();
+                    let key = CommonCtx::offline_key(&artist);
+                    ctx.submit_command(cmd::OFFLINE_PLAYLIST.with((key, tracks.len(), ids)));
                     ctx.submit_command(cmd::DOWNLOAD_TRACKS.with((artist.name, tracks)));
                 }
             },

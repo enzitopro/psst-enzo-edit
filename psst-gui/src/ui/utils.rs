@@ -151,6 +151,23 @@ pub fn cached_age_widget<T: Data>() -> impl Widget<Cached<T>> {
     )
 }
 
+/// Filled once everything downloaded plays without a connection, outlined while
+/// some of it doesn't (still downloading, or added since), nothing if it never
+/// was downloaded.
+pub fn offline_icon<T: Data>(state: fn(&T) -> Option<bool>) -> impl Widget<T> {
+    druid::widget::ViewSwitcher::new(
+        move |data: &T, _| state(data),
+        |state, _, _| match state {
+            Some(true) => icons::DOWNLOADED.scale(theme::ICON_SIZE_TINY).boxed(),
+            Some(false) => icons::DOWNLOADING
+                .scale(theme::ICON_SIZE_TINY)
+                .with_color(theme::GREY_400)
+                .boxed(),
+            None => Empty.boxed(),
+        },
+    )
+}
+
 pub fn as_minutes_and_seconds(dur: Duration) -> String {
     let minutes = dur.as_secs() / 60;
     let seconds = dur.as_secs() % 60;

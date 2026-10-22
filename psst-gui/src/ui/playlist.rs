@@ -55,14 +55,11 @@ pub fn list_widget() -> impl Widget<AppState> {
                     .with_line_break_mode(LineBreaking::WordWrap)
                     .with_text_size(theme::TEXT_SIZE_SMALL)
                     .lens(Ctx::data().then(Playlist::name));
-                // Every track plays without a connection.
-                let offline = Either::new(
-                    |playlist: &WithCtx<Playlist>, _| playlist.ctx.is_offline(&playlist.data),
-                    icons::DOWNLOADED
-                        .scale(theme::ICON_SIZE_TINY)
-                        .padding_left(theme::grid(0.5)),
-                    Empty,
-                );
+                let offline = utils::offline_icon(|playlist: &WithCtx<Playlist>| {
+                    let data = &playlist.data;
+                    playlist.ctx.offline_state(&data.id, data.track_count)
+                })
+                .padding_left(theme::grid(0.5));
                 Flex::row()
                     .cross_axis_alignment(druid::widget::CrossAxisAlignment::Center)
                     .with_child(pin)

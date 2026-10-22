@@ -727,15 +727,20 @@ impl CommonCtx {
         matches!(&self.now_playing, Some((playing, from)) if playing.id() == item.id() && from == origin)
     }
 
-    /// Whether the whole playlist plays without a connection.  A changed track
-    /// count means tracks were added or removed since it was downloaded.
-    pub fn is_offline(&self, playlist: &Playlist) -> bool {
-        self.offline_playlists
-            .get(&playlist.id)
-            .is_some_and(|(count, tracks)| {
-                playlist.track_count == Some(*count)
-                    && tracks.iter().all(|id| self.downloaded.contains(id))
-            })
+    /// Whether what was downloaded as `key` (a playlist ID, or `offline_key` of
+    /// an artist) all plays without a connection, `None` if it never was.  A
+    /// known `track_count` must still be the one at the download: a changed one
+    /// means tracks were added or removed since.
+    pub fn offline_state(&self, key: &str, track_count: Option<usize>) -> Option<bool> {
+        let (count, tracks) = self.offline_playlists.get(key)?;
+        let complete = track_count.is_none_or(|now| now == *count)
+            && tracks.iter().all(|id| self.downloaded.contains(id));
+        Some(complete)
+    }
+
+    /// Where an artist's downloaded saved songs are kept with the playlists.
+    pub fn offline_key(artist: &ArtistLink) -> Arc<str> {
+        format!("artist:{}", artist.id).into()
     }
 
     // Next to the downloads: Clear Cache keeps it, Delete Downloads removes it.
@@ -1015,17 +1020,29 @@ mod tests {
         let mut state = AppState::default_with_config(Config::default());
         let (a, b) = (track(1).id, track(2).id);
         let common = state.common_ctx_mut();
+        let state = |common: &CommonCtx| common.offline_state(&playlist.id, playlist.track_count);
         common
             .offline_playlists
             .insert(playlist.id.clone(), (2, [a, b].into_iter().collect()));
         common.downloaded.insert(a);
-        assert!(!common.is_offline(&playlist));
+        assert_eq!(state(common), Some(false));
         common.downloaded.insert(b);
-        assert!(common.is_offline(&playlist));
+        assert_eq!(state(common), Some(true));
         // A track was added since the download.
         common
             .offline_playlists
             .insert(playlist.id.clone(), (1, [a, b].into_iter().collect()));
-        assert!(!common.is_offline(&playlist));
+        assert_eq!(state(common), Some(false));
+        assert_eq!(common.offline_state(&playlist.id, Some(2)), Some(false));
+        assert_eq!(common.offline_state("never", None), None);
+        // Artists have no count to check.
+        let artist = ArtistLink {
+            id: "x".into(),
+            name: "X".into(),
+        };
+        let key = CommonCtx::offline_key(&artist);
+        let tracks = [a].into_iter().collect();
+        common.offline_playlists.insert(key.clone(), (1, tracks));
+        assert_eq!(common.offline_state(&key, None), Some(true));
     }
 }
