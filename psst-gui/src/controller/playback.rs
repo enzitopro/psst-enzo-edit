@@ -348,12 +348,14 @@ impl PlaybackController {
                     let artist = track.artist_name().to_string();
                     let title = track.name.to_string();
                     let album = track.album.as_ref().map(|a| a.name.to_string());
+                    let duration = track.duration;
                     thread::spawn(move || {
                         match LastFmClient::now_playing_song(
                             &scrobbler,
                             &artist,
                             &title,
                             album.as_deref(),
+                            duration,
                         ) {
                             Ok(()) => {
                                 log::info!("reported 'Now Playing' to Last.fm: {artist} - {title}")
@@ -381,6 +383,7 @@ impl PlaybackController {
                         let artist = track.artist_name().to_string();
                         let title = track.name.to_string();
                         let album = track.album.as_ref().map(|a| a.name.to_string());
+                        let duration = track.duration;
                         thread::spawn(move || {
                             for attempt in 1..=ATTEMPTS {
                                 match LastFmClient::scrobble_song(
@@ -388,6 +391,7 @@ impl PlaybackController {
                                     &artist,
                                     &title,
                                     album.as_deref(),
+                                    duration,
                                 ) {
                                     Ok(()) => {
                                         log::info!(

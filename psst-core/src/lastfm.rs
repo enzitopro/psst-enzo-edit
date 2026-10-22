@@ -26,8 +26,9 @@ impl LastFmClient {
         artist: &str,
         title: &str,
         album: Option<&str>,
+        duration: Duration,
     ) -> Result<(), Error> {
-        scrobbler.call("track.updateNowPlaying", artist, title, album, None)
+        scrobbler.call("track.updateNowPlaying", artist, title, album, duration, None)
     }
 
     /// Scrobble a track that has been playing for a while to Last.fm.
@@ -36,13 +37,14 @@ impl LastFmClient {
         artist: &str,
         title: &str,
         album: Option<&str>,
+        duration: Duration,
     ) -> Result<(), Error> {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs()
             .to_string();
-        scrobbler.call("track.scrobble", artist, title, album, Some(&now))
+        scrobbler.call("track.scrobble", artist, title, album, duration, Some(&now))
     }
 
     /// Creates an authenticated Last.fm Scrobbler instance with provided credentials.
@@ -76,8 +78,10 @@ impl Scrobbler {
         artist: &str,
         title: &str,
         album: Option<&str>,
+        duration: Duration,
         timestamp: Option<&str>,
     ) -> Result<(), Error> {
+        let duration = duration.as_secs().to_string();
         let mut params = vec![
             ("method", method),
             ("api_key", &self.api_key),
@@ -91,6 +95,11 @@ impl Scrobbler {
                 .map(|album| ("album", album)),
         );
         params.extend(timestamp.map(|timestamp| ("timestamp", timestamp)));
+        // Listening time adds these up; without it Last.fm only knows the
+        // length of the tracks in its own catalog.
+        if duration != "0" {
+            params.push(("duration", &duration));
+        }
         call(Some(&self.api_secret), params).map(|_| ())
     }
 }
