@@ -72,7 +72,7 @@ pub fn saved_tracks_page() -> impl Widget<AppState> {
                     // Remembered like a playlist, for the mark on the Artists page.
                     let ids = tracks
                         .iter()
-                        .filter(|t| !t.is_local)
+                        .filter(|t| t.is_downloadable())
                         .map(|t| t.id)
                         .collect();
                     let key = CommonCtx::offline_key(&artist);

@@ -85,6 +85,12 @@ impl Track {
     pub fn is_missing_local_file(&self) -> bool {
         self.is_local && self.local_path.is_none()
     }
+
+    /// Whether downloading it for offline means anything: local files are always
+    /// there, and Spotify has no audio for unplayable tracks.
+    pub fn is_downloadable(&self) -> bool {
+        !self.is_local && self.is_playable != Some(false)
+    }
 }
 
 /// Sorts tracks for display.  Text is compared ignoring case and accents, and

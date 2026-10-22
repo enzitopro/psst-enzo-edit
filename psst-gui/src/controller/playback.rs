@@ -494,10 +494,12 @@ impl PlaybackController {
     /// Fetches the track list in the background and hands it to the player to
     /// download.  `playlist` is the id and track count of a library playlist, to
     /// remember it as downloaded.
+    /// Downloads `tracks`, remembering them as a downloaded `playlist` (its ID,
+    /// and its track count when the library knows it).
     fn download(
         &self,
         ctx: &mut EventCtx,
-        playlist: Option<(Arc<str>, usize)>,
+        playlist: Option<(Arc<str>, Option<usize>)>,
         tracks: impl FnOnce() -> Result<Vector<Arc<Track>>, Error> + Send + 'static,
     ) {
         let Some(sender) = self.sender.clone() else {
@@ -507,8 +509,12 @@ impl PlaybackController {
         let widget_id = ctx.widget_id();
         thread::spawn(move || match tracks() {
             Ok(tracks) => {
-                let tracks: Vector<_> = tracks.into_iter().filter(|t| !t.is_local).collect();
+                let fetched = tracks.len();
+                let tracks: Vector<_> =
+                    tracks.into_iter().filter(|t| t.is_downloadable()).collect();
                 if let Some((id, count)) = playlist {
+                    // The library list from pathfinder has no track counts.
+                    let count = count.unwrap_or(fetched);
                     let ids = tracks.iter().map(|t| t.id).collect();
                     let _ = sink.submit_command(cmd::OFFLINE_PLAYLIST, (id, count, ids), widget_id);
                 }
@@ -643,7 +649,7 @@ where
                     .resolved()
                     .and_then(|playlists| playlists.iter().find(|p| p.id == link.id))
                     .and_then(|playlist| playlist.track_count);
-                let playlist = track_count.map(|count| (link.id.clone(), count));
+                let playlist = Some((link.id.clone(), track_count));
                 self.download(ctx, playlist, move || {
                     WebApi::global().get_all_playlist_tracks(&link.id)
                 });
