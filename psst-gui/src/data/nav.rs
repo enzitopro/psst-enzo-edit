@@ -49,6 +49,8 @@ impl Nav {
         match self {
             Nav::SavedTracks => Some(SAVED_TRACKS_LIST),
             Nav::PlaylistDetail(link) => Some(&link.id),
+            // An artist's saved songs.
+            Nav::ArtistSavedTracks(link) => Some(&link.id),
             _ => None,
         }
     }

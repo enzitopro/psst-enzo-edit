@@ -570,7 +570,7 @@ fn topbar_sort_widget() -> impl Widget<AppState> {
         .with_child(direction);
 
     Either::new(
-        |data: &AppState, _| matches!(data.nav, Nav::PlaylistDetail(_) | Nav::SavedTracks),
+        |data: &AppState, _| data.nav.track_list().is_some(),
         enabled,
         Empty,
     )

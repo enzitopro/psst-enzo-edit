@@ -261,6 +261,7 @@ impl AppState {
                 }
             });
         }
+        self.refresh_artist_saved_tracks();
     }
 }
 
@@ -354,12 +355,17 @@ impl AppState {
     /// The open artist's tracks in the library, for their saved songs page.
     pub fn refresh_artist_saved_tracks(&mut self) {
         self.artist_detail.saved_tracks = match (&self.nav, self.library.saved_tracks.resolved()) {
-            (Nav::ArtistSavedTracks(artist), Some(saved)) => saved
-                .tracks
-                .iter()
-                .filter(|track| track.artists.iter().any(|a| a.id == artist.id))
-                .cloned()
-                .collect(),
+            (Nav::ArtistSavedTracks(artist), Some(saved)) => {
+                let tracks = saved
+                    .tracks
+                    .iter()
+                    .filter(|track| track.artists.iter().any(|a| a.id == artist.id))
+                    .cloned()
+                    .collect();
+                // Each artist has a sort of its own, like the playlists.
+                let (criteria, order) = self.config.track_sort(&artist.id);
+                sort_tracks(&tracks, criteria, order)
+            }
             _ => Vector::new(),
         };
     }
@@ -1005,6 +1011,18 @@ mod tests {
             .map(|t| t.id)
             .collect();
         assert_eq!(ids, [by(2, &[]).id, by(3, &[]).id]);
+
+        // The artist's own sort, apart from the saved tracks' one.
+        let by_title = (SortCriteria::Title, SortOrder::Descending);
+        state.config.track_sorts.insert("a".into(), by_title);
+        state.resort_tracks();
+        let ids: Vec<_> = state
+            .artist_detail
+            .saved_tracks
+            .iter()
+            .map(|t| t.id)
+            .collect();
+        assert_eq!(ids, [by(3, &[]).id, by(2, &[]).id]);
 
         state.with_library_mut(|library| library.remove_track(&by(3, &[]).id));
         assert_eq!(state.artist_detail.saved_tracks.len(), 1);
