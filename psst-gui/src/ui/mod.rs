@@ -55,6 +55,27 @@ pub mod utils;
 
 pub const DOWNLOAD_ARTWORK: Selector<(String, String)> = Selector::new("app.artwork.download");
 
+/// Keeps the window's size for the next start, and to go back to from the mini
+/// player.  As Windows creates windows, with the title bar and the borders:
+/// resizes report the inside, so the window shrank on every start.
+struct KeepWindowSize;
+
+impl<W: Widget<AppState>> Controller<AppState, W> for KeepWindowSize {
+    fn event(
+        &mut self,
+        child: &mut W,
+        ctx: &mut druid::EventCtx,
+        event: &druid::Event,
+        data: &mut AppState,
+        env: &Env,
+    ) {
+        if let (druid::Event::WindowSize(_), false) = (event, data.mini_mode) {
+            data.config.window_size = ctx.window().get_size();
+        }
+        child.event(ctx, event, data, env)
+    }
+}
+
 /// The window turned into the mini player.
 const MINI_PLAYER_SIZE: (f64, f64) = (theme::GRID * 60.0, theme::GRID * 22.0);
 
@@ -203,11 +224,8 @@ fn root_widget() -> impl Widget<AppState> {
         .must_fill_main_axis(true)
         .with_child(sidebar_menu_widget())
         .with_default_spacer()
-        .with_child(
-            Flex::row()
-                .with_flex_child(playlist::sort_widget(), 1.0)
-                .with_child(playlist::new_playlist_widget()),
-        )
+        .with_child(playlist::sort_widget())
+        .with_child(playlist::new_playlist_widget().align_left())
         .with_flex_child(playlists, 1.0);
 
     let controls = Flex::column()
@@ -283,6 +301,7 @@ fn root_widget() -> impl Widget<AppState> {
         });
     });
     let root = ThemeScope::new(layout)
+        .controller(KeepWindowSize)
         .controller(SessionController)
         .controller(NavController)
         .controller(SortController)

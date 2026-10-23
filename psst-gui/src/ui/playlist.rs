@@ -77,7 +77,7 @@ const SHOW_UNFOLLOW_PLAYLIST_CONFIRM: Selector<UnfollowPlaylist> =
 
 /// "New Playlist" over the sidebar's playlists.
 pub fn new_playlist_widget() -> impl Widget<AppState> {
-    Label::new("+ New")
+    Label::new("+ New Playlist")
         .with_text_size(theme::TEXT_SIZE_SMALL)
         .with_text_color(theme::PLACEHOLDER_COLOR)
         .padding(Insets::uniform_xy(theme::grid(2.0), theme::grid(0.6)))

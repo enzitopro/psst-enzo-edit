@@ -2008,9 +2008,16 @@ impl WebApi {
                 "includedContentTypes": [],
             }),
         )?;
-        // The feed can list a release twice.
+        // The feed can list a release twice, as two versions (explicit and clean).
         let albums = response.into_albums().into_iter();
-        Ok(albums.unique_by(|album| album.id.clone()).collect())
+        Ok(albums
+            .unique_by(|album| {
+                (
+                    album.name.clone(),
+                    album.artists.front().map(|a| a.id.clone()),
+                )
+            })
+            .collect())
     }
 
     /// The artists the user follows, in library order.

@@ -25,7 +25,6 @@ pub struct Delegate {
     credits_window: Option<WindowId>,
     artwork_window: Option<WindowId>,
     image_pool: ThreadPool,
-    size_updated: bool,
 }
 
 impl Delegate {
@@ -40,7 +39,6 @@ impl Delegate {
             credits_window: None,
             artwork_window: None,
             image_pool: ThreadPool::with_name("image_loading".into(), MAX_IMAGE_THREADS),
-            size_updated: false,
         }
     }
 
@@ -277,18 +275,10 @@ impl AppDelegate<AppState> for Delegate {
         ctx: &mut DelegateCtx,
         window_id: WindowId,
         event: Event,
-        data: &mut AppState,
+        _data: &mut AppState,
         _env: &Env,
     ) -> Option<Event> {
         if self.main_window == Some(window_id) {
-            if let Event::WindowSize(size) = event {
-                if !self.size_updated {
-                    self.size_updated = true;
-                } else if !data.mini_mode {
-                    // The full size, to go back to from the mini player.
-                    data.config.window_size = size;
-                }
-            }
             // Here rather than in a widget: widgets only get keys on the focus path.
             if let Event::KeyDown(key) = &event {
                 if let Some(command) = shortcut(key) {
