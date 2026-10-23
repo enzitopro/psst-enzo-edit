@@ -28,6 +28,11 @@ pub const FETCH_PLAYLIST: (&str, &str) = (
     "fetchPlaylist",
     "21ea11a6ac75a5f3e01fd365d29c18e0a4a8b7dc09f89bbb5d73910190c6acaf",
 );
+/// New releases of the artists you follow, as the web player's "What's New".
+pub const WHATS_NEW: (&str, &str) = (
+    "queryWhatsNewFeed",
+    "d889c8c936ab192af8ced595427f5ba2acdf63478fdc0a181c8d477f8322630e",
+);
 pub const GET_ALBUM: (&str, &str) = (
     "getAlbum",
     "0b6ce3511e1b02e4a40fa95440f992acbe85080eb308af9194322d708fc1914f",
@@ -725,6 +730,90 @@ impl AlbumResponse {
     }
 }
 
+#[derive(Deserialize)]
+pub struct WhatsNewResponse {
+    data: WhatsNewData,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WhatsNewData {
+    whats_new_feed_items: WhatsNewItems,
+}
+
+#[derive(Deserialize)]
+struct WhatsNewItems {
+    #[serde(default)]
+    items: Vec<WhatsNewItem>,
+}
+
+#[derive(Deserialize)]
+struct WhatsNewItem {
+    content: Wrapper,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FeedAlbum {
+    uri: String,
+    name: String,
+    #[serde(default)]
+    album_type: Option<String>,
+    #[serde(default)]
+    artists: Option<ArtistList>,
+    #[serde(default)]
+    cover_art: Option<Sources>,
+    #[serde(default)]
+    date: Option<AlbumDate>,
+}
+
+impl WhatsNewResponse {
+    /// The releases, newest first.  Podcast episodes are left out.
+    pub fn into_albums(self) -> Vec<Arc<Album>> {
+        self.data
+            .whats_new_feed_items
+            .items
+            .into_iter()
+            .filter(|item| item.content.typename == "AlbumResponseWrapper")
+            .filter_map(|item| serde_json::from_value(item.content.data?).ok())
+            .map(|album: FeedAlbum| {
+                let date = album.date.as_ref();
+                Arc::new(Album {
+                    id: id_from_uri(&album.uri),
+                    name: album.name.into(),
+                    album_type: match album.album_type.as_deref() {
+                        Some("SINGLE") => AlbumType::Single,
+                        Some("COMPILATION") => AlbumType::Compilation,
+                        _ => AlbumType::Album,
+                    },
+                    images: album
+                        .cover_art
+                        .as_ref()
+                        .map(Sources::images)
+                        .unwrap_or_default(),
+                    artists: album
+                        .artists
+                        .map(|artists| {
+                            let link = |artist: PathfinderArtist| ArtistLink {
+                                id: id_from_uri(&artist.uri),
+                                name: artist.profile.name.into(),
+                            };
+                            artists.items.into_iter().map(link).collect()
+                        })
+                        .unwrap_or_default(),
+                    copyrights: Vector::new(),
+                    label: "".into(),
+                    tracks: Vector::new(),
+                    release_date: date
+                        .and_then(|d| d.iso_string.as_deref())
+                        .and_then(parse_iso_date),
+                    release_date_precision: Some(DatePrecision::Day),
+                })
+            })
+            .collect()
+    }
+}
+
 /// The date of `2024-02-16T00:00:00Z`.
 fn parse_iso_date(iso: &str) -> Option<Date> {
     let mut parts = iso.get(..10)?.split('-');
@@ -777,6 +866,29 @@ mod tests {
         assert_eq!(album.tracks.len(), 1);
         assert!(album.tracks[0].explicit);
         assert_eq!(album.artists[0].name.as_ref(), "Yeat");
+    }
+
+    #[test]
+    fn parses_whats_new_releases() {
+        let response: WhatsNewResponse = serde_json::from_value(json!({
+            "data": { "whatsNewFeedItems": { "items": [
+                { "content": { "__typename": "AlbumResponseWrapper", "data": {
+                    "__typename": "Album", "albumType": "SINGLE", "name": "RULE THA WORLD",
+                    "uri": "spotify:album:1ekyybUkaLVFn3zAzUnprk",
+                    "artists": { "items": [ { "uri": "spotify:artist:5No9X0ZejwFDnD1dVllwQA", "profile": { "name": "Terror Reid" } } ] },
+                    "coverArt": { "sources": [ { "url": "https://i.scdn.co/a", "width": 300, "height": 300 } ] },
+                    "date": { "isoString": "2026-10-23T00:00:00Z", "precision": "DAY" }
+                } } },
+                { "content": { "__typename": "EpisodeOrChapterResponseWrapper", "data": { "__typename": "Episode" } } }
+            ] } }
+        }))
+        .unwrap();
+        let albums = response.into_albums();
+        assert_eq!(albums.len(), 1);
+        assert_eq!(&*albums[0].id, "1ekyybUkaLVFn3zAzUnprk");
+        assert_eq!(albums[0].album_type, AlbumType::Single);
+        assert_eq!(albums[0].artists[0].name.as_ref(), "Terror Reid");
+        assert!(albums[0].release_date.is_some());
     }
 
     #[test]

@@ -98,6 +98,11 @@ pub struct AppState {
     pub mini_mode: bool,
     /// The mini player shows the lyrics under its controls.
     pub mini_lyrics_open: bool,
+    /// The followed artists' releases.
+    pub new_releases: Promise<Vector<Arc<Album>>>,
+    /// Your Last.fm top of a period ("7day"...).
+    pub stats: Promise<Stats, Arc<str>>,
+    pub stats_period: Arc<str>,
     /// The queue shows what played instead of what plays next.
     pub queue_shows_history: bool,
     pub credits: Option<TrackCredits>,
@@ -198,6 +203,9 @@ impl AppState {
             queue_panel_open: false,
             mini_mode: false,
             mini_lyrics_open: false,
+            new_releases: Promise::Empty,
+            stats: Promise::Empty,
+            stats_period: "1month".into(),
             queue_shows_history: false,
             credits: None,
             download_queue: Vector::new(),
@@ -209,13 +217,19 @@ impl AppState {
 impl AppState {
     pub fn navigate(&mut self, nav: &Nav) {
         if &self.nav != nav {
+            // shortcut: older builds sharing the config fail to read a page they
+            // don't know, so the new pages aren't kept as the last one; drop
+            // once every build reads unknown pages as Home.
+            let new_page = matches!(nav, Nav::NewReleases | Nav::Stats);
             // A selection is of the page's list.
             if !self.common_ctx.selected.is_empty() {
                 self.common_ctx_mut().selected.clear();
             }
             let previous = mem::replace(&mut self.nav, nav.to_owned());
             self.history.push_back(previous);
-            self.config.last_route.replace(nav.to_owned());
+            if !new_page {
+                self.config.last_route.replace(nav.to_owned());
+            }
             Arc::make_mut(&mut self.common_ctx).nav = nav.to_owned();
         }
     }
@@ -834,6 +848,23 @@ impl CommonCtx {
 }
 
 pub type WithCtx<T> = Ctx<Arc<CommonCtx>, T>;
+
+/// Your Last.fm scrobbles: their count, and the top artists and tracks.
+#[derive(Clone, Data, Lens)]
+pub struct Stats {
+    pub scrobbles: u64,
+    pub artists: Vector<StatEntry>,
+    pub tracks: Vector<StatEntry>,
+}
+
+#[derive(Clone, Data, Lens)]
+pub struct StatEntry {
+    pub title: Arc<str>,
+    pub subtitle: Arc<str>,
+    pub plays: u64,
+    /// What to search on Spotify for it.
+    pub query: Arc<str>,
+}
 
 #[derive(Clone, Data, Lens)]
 pub struct HomeDetail {

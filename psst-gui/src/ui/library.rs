@@ -23,6 +23,7 @@ use super::{album, artist, playable, theme, track, utils};
 pub const LOAD_TRACKS: Selector = Selector::new("app.library.load-tracks");
 pub const LOAD_ALBUMS: Selector = Selector::new("app.library.load-albums");
 pub const LOAD_ARTISTS: Selector = Selector::new("app.library.load-artists");
+pub const LOAD_NEW_RELEASES: Selector = Selector::new("app.library.load-new-releases");
 /// Follows (`true`) or unfollows an artist.
 pub const FOLLOW_ARTIST: Selector<(ArtistLink, bool)> = Selector::new("app.library.follow-artist");
 pub const LOAD_SHOWS: Selector = Selector::new("app.library.load-shows");
@@ -127,6 +128,27 @@ pub fn followed_artists_widget() -> impl Widget<AppState> {
             artists(true),
             artists(false),
         ))
+}
+
+/// The releases of the artists you follow, newest first, as Spotify's "What's New".
+pub fn new_releases_widget() -> impl Widget<AppState> {
+    Async::new(
+        utils::spinner_widget,
+        album::grid_widget,
+        utils::error_widget,
+    )
+    .lens(Ctx::make(AppState::common_ctx, AppState::new_releases).then(Ctx::in_promise()))
+    .on_command_async(
+        LOAD_NEW_RELEASES,
+        |_| WebApi::global().get_new_releases(),
+        |_, data: &mut AppState, _| {
+            // A refresh keeps showing what's there.
+            if !data.new_releases.is_resolved() {
+                data.new_releases.defer_default();
+            }
+        },
+        |_, data, (_, result)| refreshed(&mut data.new_releases, result),
+    )
 }
 
 /// Puts a load's result in place, except a failed refresh, which keeps the old data.

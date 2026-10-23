@@ -47,6 +47,7 @@ pub mod preferences;
 pub mod queue;
 pub mod search;
 pub mod show;
+pub mod stats;
 pub mod theme;
 pub mod track;
 pub mod user;
@@ -384,6 +385,14 @@ fn route_widget() -> impl Widget<AppState> {
             Route::Shows => Scroll::new(library::saved_shows_widget().padding(theme::grid(1.0)))
                 .vertical()
                 .boxed(),
+            Route::NewReleases => {
+                Scroll::new(library::new_releases_widget().padding(theme::grid(1.0)))
+                    .vertical()
+                    .boxed()
+            }
+            Route::Stats => Scroll::new(stats::stats_widget().padding(theme::grid(1.0)))
+                .vertical()
+                .boxed(),
             Route::SearchResults => search::results_widget().padding(theme::grid(1.0)).boxed(),
             Route::AlbumDetail => Scroll::new(album::detail_widget().padding(theme::grid(1.0)))
                 .vertical()
@@ -586,6 +595,16 @@ fn sidebar_menu_widget() -> impl Widget<AppState> {
             "Podcasts",
             Some(&icons::PODCAST),
             Nav::Shows,
+        ))
+        .with_child(sidebar_link_widget(
+            "New Releases",
+            Some(&icons::STAR),
+            Nav::NewReleases,
+        ))
+        .with_child(sidebar_link_widget(
+            "Stats",
+            Some(&icons::STATS),
+            Nav::Stats,
         ))
         .with_child(search::input_widget().padding((theme::grid(1.0), theme::grid(1.0))))
 }
@@ -802,6 +821,8 @@ fn route_icon_widget() -> impl Widget<Nav> {
             let icon = |icon: &SvgIcon| icon.scale(theme::ICON_SIZE_MEDIUM);
             match &nav {
                 Nav::Home
+                | Nav::NewReleases
+                | Nav::Stats
                 | Nav::Lyrics
                 | Nav::SavedTracks
                 | Nav::SavedAlbums

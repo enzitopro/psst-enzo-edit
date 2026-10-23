@@ -10,6 +10,8 @@ use crate::data::{AlbumLink, ArtistLink, PlaylistLink, ShowLink};
 #[derive(Copy, Clone, Debug, Data, PartialEq, Eq, Hash)]
 pub enum Route {
     Home,
+    NewReleases,
+    Stats,
     Lyrics,
     SavedTracks,
     SavedAlbums,
@@ -27,6 +29,8 @@ pub enum Route {
 pub enum Nav {
     #[default]
     Home,
+    NewReleases,
+    Stats,
     Lyrics,
     SavedTracks,
     SavedAlbums,
@@ -58,6 +62,8 @@ impl Nav {
     pub fn route(&self) -> Route {
         match self {
             Nav::Home => Route::Home,
+            Nav::NewReleases => Route::NewReleases,
+            Nav::Stats => Route::Stats,
             Nav::Lyrics => Route::Lyrics,
             Nav::SavedTracks => Route::SavedTracks,
             Nav::SavedAlbums => Route::SavedAlbums,
@@ -75,6 +81,8 @@ impl Nav {
     pub fn title(&self) -> String {
         match self {
             Nav::Home => "Home".to_string(),
+            Nav::NewReleases => "New Releases".to_string(),
+            Nav::Stats => "Stats".to_string(),
             Nav::Lyrics => "Lyrics".to_string(),
             Nav::SavedTracks => "Saved Tracks".to_string(),
             Nav::SavedAlbums => "Saved Albums".to_string(),
@@ -92,6 +100,8 @@ impl Nav {
     pub fn full_title(&self) -> String {
         match self {
             Nav::Home => "Home".to_string(),
+            Nav::NewReleases => "New Releases".to_string(),
+            Nav::Stats => "Your Last.fm Stats".to_string(),
             Nav::Lyrics => "Lyrics".to_string(),
             Nav::SavedTracks => "Saved Tracks".to_string(),
             Nav::SavedAlbums => "Saved Albums".to_string(),

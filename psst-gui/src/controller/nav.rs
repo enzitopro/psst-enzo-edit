@@ -3,7 +3,7 @@ use std::time::Duration;
 use crate::{
     cmd,
     data::{AppState, Nav, PromiseState, SpotifyUrl},
-    ui::{album, artist, home, library, lyrics, playlist, search, show},
+    ui::{album, artist, home, library, lyrics, playlist, search, show, stats},
     webapi::WebApi,
 };
 use druid::widget::{prelude::*, Controller};
@@ -42,6 +42,17 @@ impl NavController {
     fn load_route_data(&self, ctx: &mut EventCtx, data: &mut AppState) {
         match &data.nav {
             Nav::Home => {}
+            // One request each: fresh on every visit.
+            Nav::NewReleases => {
+                if !data.new_releases.is_deferred(&()) {
+                    ctx.submit_command(library::LOAD_NEW_RELEASES);
+                }
+            }
+            Nav::Stats => {
+                if !data.stats.is_deferred(&data.stats_period) {
+                    ctx.submit_command(stats::LOAD_STATS.with(data.stats_period.clone()));
+                }
+            }
             Nav::Lyrics => {}
             Nav::SavedTracks => {
                 // Liked on the phone meanwhile?  4000 tracks take a while, so not

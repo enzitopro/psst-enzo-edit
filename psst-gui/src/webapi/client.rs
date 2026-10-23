@@ -1997,6 +1997,22 @@ impl WebApi {
         Ok(playlists)
     }
 
+    /// Releases of the artists you follow, newest first.
+    pub fn get_new_releases(&self) -> Result<Vector<Arc<Album>>, Error> {
+        let response: pathfinder::WhatsNewResponse = self.pathfinder_query(
+            pathfinder::WHATS_NEW,
+            json!({
+                "offset": 0,
+                "limit": 50,
+                "onlyUnPlayedItems": false,
+                "includedContentTypes": [],
+            }),
+        )?;
+        // The feed can list a release twice.
+        let albums = response.into_albums().into_iter();
+        Ok(albums.unique_by(|album| album.id.clone()).collect())
+    }
+
     /// The artists the user follows, in library order.
     pub fn get_followed_artists(&self) -> Result<Vector<Artist>, Error> {
         self.library_v3_items("Artists", false, None, |page| page.into_artists())

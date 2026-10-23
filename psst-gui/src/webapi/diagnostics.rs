@@ -1197,3 +1197,27 @@ fn diagnostics_playlist_move_track() {
     };
     assert_eq!(order(&after), order(&before));
 }
+
+/// The followed artists' releases, and your Last.fm top of the month.
+#[test]
+#[ignore]
+fn diagnostics_new_releases_and_stats() {
+    let mut config = Config::load().expect("Psst config not found, log in first");
+    init(&mut config);
+    let releases = WebApi::global().get_new_releases().expect("new releases");
+    println!("{} new releases", releases.len());
+    for album in releases.iter().take(5) {
+        println!("  {} by {} ({:?})", album.name, album.artists[0].name, album.release_date);
+    }
+    let (Some(key), Some(secret), Some(session)) = (
+        config.lastfm_api_key.as_deref(),
+        config.lastfm_api_secret.as_deref(),
+        config.lastfm_session_key.as_deref(),
+    ) else {
+        panic!("Last.fm is not set up");
+    };
+    let top = psst_core::lastfm::top_stats(key, secret, session, "1month").expect("stats");
+    println!("{} scrobbles, {} top artists, {} top tracks", top.scrobbles, top.artists.len(), top.tracks.len());
+    println!("  top artist {:?}, top track {:?}", top.artists.first(), top.tracks.first());
+    assert!(!releases.is_empty() && !top.artists.is_empty());
+}

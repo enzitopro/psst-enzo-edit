@@ -136,6 +136,7 @@ pub struct Config {
     /// own: an unknown `theme` value would make older builds drop the config.
     pub theme_follows_windows: bool,
     pub volume: f64,
+    #[serde(deserialize_with = "known_route")]
     pub last_route: Option<Nav>,
     pub queue_behavior: QueueBehavior,
     pub show_track_cover: bool,
@@ -411,6 +412,13 @@ pub enum SortCriteria {
     DateAdded,
 }
 
+/// The last page, or none for a page this build doesn't know (saved by a newer
+/// one), instead of failing to read the whole config.
+fn known_route<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<Nav>, D::Error> {
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(serde_json::from_value(value).ok().flatten())
+}
+
 fn get_dir_size(path: &Path) -> Option<u64> {
     fs::read_dir(path).ok()?.try_fold(0, |acc, entry| {
         let entry = entry.ok()?;
@@ -426,6 +434,20 @@ fn get_dir_size(path: &Path) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_page_from_a_newer_build_opens_home() {
+        let config: Config = serde_json::from_value(serde_json::json!({
+            "last_route": "SomePageFromTheFuture",
+            "volume": 0.5,
+        }))
+        .unwrap();
+        assert_eq!(config.last_route, None);
+        assert_eq!(config.volume, 0.5);
+        let config: Config =
+            serde_json::from_value(serde_json::json!({ "last_route": "Stats" })).unwrap();
+        assert_eq!(config.last_route, Some(Nav::Stats));
+    }
 
     #[test]
     fn broken_config_starts_with_defaults() {

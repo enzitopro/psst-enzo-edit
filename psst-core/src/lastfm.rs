@@ -28,7 +28,14 @@ impl LastFmClient {
         album: Option<&str>,
         duration: Duration,
     ) -> Result<(), Error> {
-        scrobbler.call("track.updateNowPlaying", artist, title, album, duration, None)
+        scrobbler.call(
+            "track.updateNowPlaying",
+            artist,
+            title,
+            album,
+            duration,
+            None,
+        )
     }
 
     /// Scrobble a track that has been playing for a while to Last.fm.
@@ -216,6 +223,79 @@ fn tag_tracks(json: &serde_json::Value) -> Vec<(String, String)> {
         .collect()
 }
 
+/// A Last.fm user's scrobbles: the count of all of them, and the top artists
+/// (name, plays) and tracks (artist, title, plays) of a period.
+pub struct TopStats {
+    pub scrobbles: u64,
+    pub artists: Vec<(String, u64)>,
+    pub tracks: Vec<(String, String, u64)>,
+}
+
+/// The top of `period`: "7day", "1month", "12month" or "overall".
+pub fn top_stats(
+    api_key: &str,
+    api_secret: &str,
+    session_key: &str,
+    period: &str,
+) -> Result<TopStats, Error> {
+    let info = call(
+        Some(api_secret),
+        vec![
+            ("method", "user.getInfo"),
+            ("api_key", api_key),
+            ("sk", session_key),
+        ],
+    )?;
+    let user = info["user"]["name"]
+        .as_str()
+        .ok_or_else(|| Error::ScrobblerError("no user name in the response".to_string()))?;
+    let top = |method| {
+        let params = vec![
+            ("method", method),
+            ("api_key", api_key),
+            ("user", user),
+            ("period", period),
+            ("limit", "20"),
+        ];
+        call(None, params)
+    };
+    Ok(TopStats {
+        scrobbles: count(&info["user"]["playcount"]),
+        artists: top_artists(&top("user.gettopartists")?),
+        tracks: top_tracks(&top("user.gettoptracks")?),
+    })
+}
+
+/// Last.fm sends its counts as strings.
+fn count(value: &serde_json::Value) -> u64 {
+    value.as_str().and_then(|n| n.parse().ok()).unwrap_or(0)
+}
+
+fn top_artists(json: &serde_json::Value) -> Vec<(String, u64)> {
+    let artists = json["topartists"]["artist"].as_array();
+    artists
+        .into_iter()
+        .flatten()
+        .filter_map(|a| Some((a["name"].as_str()?.to_string(), count(&a["playcount"]))))
+        .collect()
+}
+
+fn top_tracks(json: &serde_json::Value) -> Vec<(String, String, u64)> {
+    let tracks = json["toptracks"]["track"].as_array();
+    tracks
+        .into_iter()
+        .flatten()
+        .filter_map(|t| {
+            let artist = t["artist"]["name"].as_str()?.to_string();
+            Some((
+                artist,
+                t["name"].as_str()?.to_string(),
+                count(&t["playcount"]),
+            ))
+        })
+        .collect()
+}
+
 /// Listen for a Last.fm token from the callback
 pub fn get_lastfm_token_listener(
     socket_address: SocketAddr,
@@ -242,6 +322,23 @@ mod tests {
             "47656600a9b4352066d3092b68e9036b"
         );
         assert_eq!(params[0].0, "api_key");
+    }
+
+    #[test]
+    fn reads_top_artists_and_tracks() {
+        let artists = serde_json::json!({ "topartists": { "artist": [
+            { "name": "Yeat", "playcount": "1234" }, { "playcount": "9" }
+        ] } });
+        assert_eq!(top_artists(&artists), [("Yeat".to_string(), 1234)]);
+        let tracks = serde_json::json!({ "toptracks": { "track": [
+            { "name": "COCOON", "playcount": "56", "artist": { "name": "Yeat" } },
+            { "name": "No artist", "playcount": "1" }
+        ] } });
+        assert_eq!(
+            top_tracks(&tracks),
+            [("Yeat".to_string(), "COCOON".to_string(), 56)]
+        );
+        assert_eq!(count(&serde_json::json!(null)), 0);
     }
 
     #[test]
