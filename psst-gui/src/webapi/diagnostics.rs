@@ -336,7 +336,8 @@ fn diagnostics_library_edits() {
             println!("unsave album: {:?}", api.unsave_album(&album.id));
         }
     }
-    println!("add to playlist:      {:?}", api.add_track_to_playlist(&id, &uri));
+    let added = api.add_tracks_to_playlist(&id, std::slice::from_ref(&uri));
+    println!("add to playlist:      {added:?}");
     println!("remove from playlist: {:?}", api.remove_track_from_playlist(&id, &uri));
     let playlist = api.get_playlist(&id).expect("playlist detail");
     println!(

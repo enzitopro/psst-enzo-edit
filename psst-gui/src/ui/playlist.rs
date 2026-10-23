@@ -180,24 +180,12 @@ pub fn list_widget() -> impl Widget<AppState> {
     .on_command_async(
         ADD_TRACK,
         |d| {
-            WebApi::global().add_track_to_playlist(
-                &d.link.id,
-                &d.track_id
-                    .0
-                    .to_uri()
-                    .ok_or_else(|| Error::WebApiError("Item doesn't have URI".to_string()))?,
-            )
+            let uri = d.track_id.0.to_uri();
+            let uri = uri.ok_or_else(|| Error::WebApiError("Item doesn't have URI".to_string()))?;
+            WebApi::global().add_new_tracks_to_playlist(&d.link.id, &[uri])
         },
-        |_, data, d| {
-            data.with_library_mut(|library| library.increment_playlist_track_count(&d.link, 1))
-        },
-        |_, data, (_, r)| {
-            if let Err(err) = r {
-                data.error_alert(err);
-            } else {
-                data.info_alert("Added to playlist.");
-            }
-        },
+        |_, _: &mut AppState, _| {},
+        |_, data, (d, result)| added_tracks(data, &d.link, result),
     )
     .on_command_async(
         MOVE_TRACK,
@@ -214,10 +202,7 @@ pub fn list_widget() -> impl Widget<AppState> {
     .on_command_async(
         ADD_TRACKS,
         |(link, tracks)| {
-            let uris = spotify_uris(&tracks);
-            WebApi::global()
-                .add_tracks_to_playlist(&link.id, &uris)
-                .map(|()| uris.len())
+            WebApi::global().add_new_tracks_to_playlist(&link.id, &spotify_uris(&tracks))
         },
         |_, _: &mut AppState, _| {},
         |_, data, ((link, _), result)| added_tracks(data, &link, result),
@@ -226,9 +211,7 @@ pub fn list_widget() -> impl Widget<AppState> {
         ADD_ALBUM,
         |(link, album)| {
             let uris = spotify_uris(&WebApi::global().get_album(&album.id)?.data.tracks);
-            WebApi::global()
-                .add_tracks_to_playlist(&link.id, &uris)
-                .map(|()| uris.len())
+            WebApi::global().add_new_tracks_to_playlist(&link.id, &uris)
         },
         |_, _: &mut AppState, _| {},
         |_, data, ((link, _), result)| added_tracks(data, &link, result),
@@ -878,11 +861,17 @@ struct UnfollowPlaylist {
 }
 
 /// The Spotify URIs of `tracks`, leaving out local files, which have none.
-fn added_tracks(data: &mut AppState, link: &PlaylistLink, result: Result<usize, Error>) {
+fn added_tracks(data: &mut AppState, link: &PlaylistLink, result: Result<(usize, usize), Error>) {
+    let name = &link.name;
     match result {
-        Ok(added) => {
+        Ok((0, skipped)) if skipped > 0 => data.info_alert(format!("Already in \"{name}\"")),
+        Ok((added, skipped)) => {
             data.with_library_mut(|l| l.increment_playlist_track_count(link, added));
-            data.info_alert(format!("Added {added} songs to \"{}\"", link.name));
+            let already = match skipped {
+                0 => String::new(),
+                n => format!(", {n} were already there"),
+            };
+            data.info_alert(format!("Added {added} songs to \"{name}\"{already}"));
         }
         Err(err) => data.error_alert(format!("Couldn't add the songs: {err}")),
     }

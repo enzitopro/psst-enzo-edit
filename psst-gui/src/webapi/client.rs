@@ -2270,16 +2270,6 @@ impl WebApi {
         self.send_empty_json(request)
     }
 
-    // https://developer.spotify.com/documentation/web-api/reference/add-items-to-playlist
-    pub fn add_track_to_playlist(&self, playlist_id: &str, track_uri: &str) -> Result<(), Error> {
-        let request = &RequestBuilder::new(
-            format!("v1/playlists/{playlist_id}/items"),
-            Method::Post,
-            Some(json!({"uris": [track_uri]})),
-        );
-        self.send_empty_json(request)
-    }
-
     /// Moves the item at `from` to before the one at `before`, positions in the
     /// playlist's own order.
     pub fn move_in_playlist(
@@ -2293,6 +2283,20 @@ impl WebApi {
         self.send_empty_json(&RequestBuilder::new(path, Method::Put, Some(body)))
     }
 
+    /// Adds the tracks not in the playlist yet, each once. Returns how many were
+    /// added, and how many were already there.
+    pub fn add_new_tracks_to_playlist(
+        &self,
+        playlist_id: &str,
+        uris: &[String],
+    ) -> Result<(usize, usize), Error> {
+        let present = self.get_all_playlist_tracks(playlist_id)?;
+        let new = not_in(present.iter().filter_map(|t| t.id.0.to_uri()), uris);
+        self.add_tracks_to_playlist(playlist_id, &new)?;
+        Ok((new.len(), uris.len() - new.len()))
+    }
+
+    // https://developer.spotify.com/documentation/web-api/reference/add-items-to-playlist
     /// Adds tracks at the end of a playlist, in order, 100 per request.
     pub fn add_tracks_to_playlist(&self, playlist_id: &str, uris: &[String]) -> Result<(), Error> {
         for chunk in uris.chunks(100) {
@@ -2706,9 +2710,25 @@ mod load_cached_tests {
     }
 }
 
+/// The URIs not in `present`, each once, in order.
+fn not_in(present: impl Iterator<Item = String>, uris: &[String]) -> Vec<String> {
+    let mut seen: HashSet<String> = present.collect();
+    uris.iter()
+        .filter(|uri| seen.insert(uri.to_string()))
+        .cloned()
+        .collect()
+}
+
 #[cfg(test)]
 mod fetch_pages_tests {
     use super::*;
+
+    #[test]
+    fn adds_only_what_the_playlist_lacks() {
+        let uris = ["a", "b", "c", "b"].map(String::from);
+        let present = ["c".to_string()].into_iter();
+        assert_eq!(not_in(present, &uris), ["a", "b"]);
+    }
 
     #[test]
     fn keeps_the_page_order_and_fails_with_any_page() {
