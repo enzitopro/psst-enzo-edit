@@ -29,7 +29,10 @@ use druid::{
     Color, Env, Insets, Key, LensExt, Menu, MenuItem, Selector, Widget, WidgetExt, WindowDesc,
 };
 use druid_shell::Cursor;
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use std::time::Duration;
 
 pub mod album;
@@ -69,11 +72,68 @@ impl<W: Widget<AppState>> Controller<AppState, W> for KeepWindowSize {
         data: &mut AppState,
         env: &Env,
     ) {
-        if let (druid::Event::WindowSize(_), false) = (event, data.mini_mode) {
-            data.config.window_size = ctx.window().get_size();
+        match (event, data.mini_mode) {
+            (druid::Event::WindowConnected, _) => keep_min_size(ctx.window()),
+            (druid::Event::WindowSize(_), false) => {
+                data.config.window_size = ctx.window().get_size();
+            }
+            _ => {}
         }
         child.event(ctx, event, data, env)
     }
+}
+
+/// The smallest window the full layout fits in: the sidebar's links with a few
+/// playlists, and the playback bar's buttons.
+const MIN_WINDOW_SIZE: (f64, f64) = (theme::GRID * 90.0, theme::GRID * 70.0);
+
+/// Whether the window shows the full layout, not the mini player.
+static FULL_LAYOUT: AtomicBool = AtomicBool::new(true);
+
+/// Holds the full layout at its minimum size. Druid sets a minimum only when
+/// the window opens, so that one is the mini player's.
+fn keep_min_size(window: &druid::WindowHandle) {
+    use raw_window_handle::{HasRawWindowHandle, RawWindowHandle};
+    use windows_sys::Win32::{
+        Foundation::{HWND, LPARAM, LRESULT, WPARAM},
+        UI::{
+            HiDpi::GetDpiForWindow,
+            Shell::{DefSubclassProc, SetWindowSubclass},
+            WindowsAndMessaging::{MINMAXINFO, WM_GETMINMAXINFO},
+        },
+    };
+
+    unsafe extern "system" fn proc(
+        hwnd: HWND,
+        msg: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+        _: usize,
+        _: usize,
+    ) -> LRESULT {
+        // SAFETY: passes the message on to druid's own handling.
+        let result = unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) };
+        if msg == WM_GETMINMAXINFO && FULL_LAYOUT.load(Ordering::Relaxed) {
+            let dpi = f64::from(unsafe { GetDpiForWindow(hwnd) });
+            let px = |dp: f64| (dp * dpi / 96.0) as i32;
+            // SAFETY: this message's lparam points to the window's MINMAXINFO.
+            let info = unsafe { &mut *(lparam as *mut MINMAXINFO) };
+            info.ptMinTrackSize.x = px(MIN_WINDOW_SIZE.0);
+            info.ptMinTrackSize.y = px(MIN_WINDOW_SIZE.1);
+        }
+        result
+    }
+
+    if let RawWindowHandle::Win32(handle) = window.raw_window_handle() {
+        // SAFETY: the window is open, and `proc` passes on every message.
+        unsafe { SetWindowSubclass(handle.hwnd, Some(proc), 1, 0) };
+    }
+    // A size saved smaller opens as it was.
+    let size = window.get_size();
+    window.set_size(druid::Size::new(
+        size.width.max(MIN_WINDOW_SIZE.0),
+        size.height.max(MIN_WINDOW_SIZE.1),
+    ));
 }
 
 /// The window turned into the mini player.
@@ -82,8 +142,7 @@ const MINI_PLAYER_SIZE: (f64, f64) = (theme::GRID * 60.0, theme::GRID * 22.0);
 pub fn main_window(config: &Config) -> WindowDesc<AppState> {
     WindowDesc::new(root_widget())
         .title(compute_main_window_title)
-        // shortcut: as small as the mini player, so the full layout can be shrunk
-        // that far too; druid sets the minimum only when the window opens.
+        // The mini player's; `keep_min_size` holds the full layout's.
         .with_min_size(MINI_PLAYER_SIZE)
         .window_size(config.window_size)
         .show_title(false)
@@ -292,6 +351,7 @@ fn root_widget() -> impl Widget<AppState> {
     )
     .on_command(cmd::TOGGLE_MINI_PLAYER, |ctx, _, data: &mut AppState| {
         data.mini_mode = !data.mini_mode;
+        FULL_LAYOUT.store(!data.mini_mode, Ordering::Relaxed);
         let window = ctx.window();
         window.set_always_on_top(data.mini_mode);
         window.set_size(if data.mini_mode {

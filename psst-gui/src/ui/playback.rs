@@ -30,7 +30,7 @@ pub fn panel_widget() -> impl Widget<AppState> {
     let item_info = Maybe::or_empty(playing_item_widget).lens(Playback::now_playing);
     let controls = Either::new(
         |playback, _| playback.now_playing.is_some(),
-        player_widget(),
+        player_widget(false),
         Empty,
     );
     Flex::column()
@@ -51,7 +51,7 @@ pub fn mini_player_widget() -> impl Widget<AppState> {
     let item_info = Maybe::or_empty(playing_item_widget).lens(Playback::now_playing);
     let controls = Either::new(
         |playback: &Playback, _| playback.now_playing.is_some(),
-        player_widget(),
+        player_widget(true),
         Label::new("Nothing playing")
             .with_text_color(theme::PLACEHOLDER_COLOR)
             .padding(theme::grid(2.0)),
@@ -275,7 +275,33 @@ fn playback_origin_icon(origin: &PlaybackOrigin) -> &'static SvgIcon {
     }
 }
 
-fn player_widget() -> impl Widget<Playback> {
+/// The controls, and in the `mini` player only the way back from it: the
+/// lyrics and the queue are panels of the full layout.
+fn player_widget(mini: bool) -> impl Widget<Playback> {
+    let mut panels = Flex::row();
+    if !mini {
+        panels = panels
+            .with_child(
+                small_button_widget(&icons::MUSIC_NOTE).on_left_click(|ctx, _, _, _| {
+                    ctx.submit_command(TOGGLE_LYRICS);
+                }),
+            )
+            .with_child(small_button_widget(&icons::FLOATING_WINDOW).on_left_click(
+                |ctx, _, _, _| {
+                    ctx.submit_command(cmd::TOGGLE_LYRICS_WINDOW);
+                },
+            ))
+            .with_child(
+                small_button_widget(&icons::PLAYLIST).on_left_click(|ctx, _, _, _| {
+                    ctx.submit_command(cmd::TOGGLE_QUEUE);
+                }),
+            );
+    }
+    let panels = panels.with_child(small_button_widget(&icons::MINI_PLAYER).on_left_click(
+        |ctx, _, _, _| {
+            ctx.submit_command(cmd::TOGGLE_MINI_PLAYER);
+        },
+    ));
     Flex::row()
         .with_child(
             small_button_widget(&icons::SKIP_BACK).on_left_click(|ctx, _, _, _| {
@@ -294,30 +320,7 @@ fn player_widget() -> impl Widget<Playback> {
         .with_child(queue_behavior_widget())
         .with_default_spacer()
         .with_child(Maybe::or_empty(durations_widget).lens(Playback::now_playing))
-        .with_child(
-            Flex::row()
-                .with_child(small_button_widget(&icons::MUSIC_NOTE).on_left_click(
-                    |ctx, _, _, _| {
-                        ctx.submit_command(TOGGLE_LYRICS);
-                    },
-                ))
-                .with_child(small_button_widget(&icons::FLOATING_WINDOW).on_left_click(
-                    |ctx, _, _, _| {
-                        ctx.submit_command(cmd::TOGGLE_LYRICS_WINDOW);
-                    },
-                ))
-                .with_child(
-                    small_button_widget(&icons::PLAYLIST).on_left_click(|ctx, _, _, _| {
-                        ctx.submit_command(cmd::TOGGLE_QUEUE);
-                    }),
-                )
-                .with_child(small_button_widget(&icons::MINI_PLAYER).on_left_click(
-                    |ctx, _, _, _| {
-                        ctx.submit_command(cmd::TOGGLE_MINI_PLAYER);
-                    },
-                ))
-                .align_right(),
-        )
+        .with_child(panels.align_right())
         .padding(theme::grid(2.0))
 }
 
