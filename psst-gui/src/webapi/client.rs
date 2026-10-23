@@ -905,6 +905,19 @@ impl WebApi {
     }
 }
 
+/// A Web API playlist.  Since 2026 its tracks (and their count) come as `items`
+/// instead of `tracks`, which left the count out.
+fn playlist_from_json(mut value: serde_json::Value) -> Result<Playlist, Error> {
+    if let Some(playlist) = value.as_object_mut() {
+        if !playlist.contains_key("tracks") {
+            if let Some(items) = playlist.remove("items") {
+                playlist.insert("tracks".to_string(), items);
+            }
+        }
+    }
+    Ok(serde_json::from_value(value)?)
+}
+
 /// Positions `tracks` in their order, which a copy from the cache doesn't keep.
 fn numbered(mut tracks: Vector<Arc<Track>>) -> Vector<Arc<Track>> {
     for (position, track) in tracks.iter_mut().enumerate() {
@@ -2114,7 +2127,7 @@ impl WebApi {
     // https://developer.spotify.com/documentation/web-api/reference/get-playlist
     pub fn get_playlist(&self, id: &str) -> Result<Playlist, Error> {
         let request = &RequestBuilder::new(format!("v1/playlists/{id}"), Method::Get, None);
-        match self.load(request) {
+        match self.load(request).and_then(playlist_from_json) {
             Ok(playlist) => Ok(playlist),
             // Spotify-generated mixes are a 404 on the Web API for third-party
             // apps, but pathfinder serves them.
@@ -2581,6 +2594,20 @@ mod load_cached_tests {
         assert!(load().is_err());
 
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn playlist_track_count_from_items_or_tracks() {
+        let playlist = |page_key: &str| {
+            serde_json::json!({
+                "id": "p", "name": "P", "description": "", "collaborative": false,
+                "owner": { "id": "u", "display_name": "U" }, "public": true,
+                page_key: { "total": 214, "items": [] },
+            })
+        };
+        let count = |key| playlist_from_json(playlist(key)).unwrap().track_count;
+        assert_eq!(count("items"), Some(214));
+        assert_eq!(count("tracks"), Some(214));
     }
 
     #[test]
