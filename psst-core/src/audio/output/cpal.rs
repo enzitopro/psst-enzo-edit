@@ -1,7 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use crossbeam_channel::{bounded, Receiver, Sender};
+use crossbeam_channel::{unbounded, Receiver, Sender};
 use num_traits::Pow;
 use parking_lot::Mutex;
 
@@ -35,7 +35,10 @@ impl CpalOutput {
         // the device supports.
         let supported = Self::preferred_output_config(&device)?;
 
-        let (callback_send, callback_recv) = bounded(16);
+        // Unbounded: only the audio callback drains it, and that doesn't run while
+        // paused, so a bounded one filled up with volume changes and blocked the
+        // player for good, which then never took the resume.
+        let (callback_send, callback_recv) = unbounded();
 
         let handle = Stream::spawn_with_default_cap("audio_output", {
             let config = supported.config();
@@ -473,5 +476,33 @@ impl From<cpal::PlayStreamError> for Error {
 impl From<cpal::PauseStreamError> for Error {
     fn from(err: cpal::PauseStreamError) -> Error {
         Error::AudioOutputError(Box::new(err))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{sync::mpsc, thread, time::Duration};
+
+    use super::*;
+    use crate::audio::output::{AudioOutput, AudioSink};
+
+    /// Needs an audio device, so not on CI.
+    #[test]
+    #[ignore]
+    fn volume_changes_while_paused_dont_block() {
+        let output = CpalOutput::open().expect("audio output");
+        let sink = output.sink();
+        sink.set_volume(0.0);
+        sink.pause();
+        let (done, finished) = mpsc::channel();
+        thread::spawn(move || {
+            // A volume slider dragged while paused.
+            for step in 0..200 {
+                sink.set_volume(step as f32 / 2000.0);
+            }
+            sink.resume();
+            done.send(()).unwrap();
+        });
+        assert!(finished.recv_timeout(Duration::from_secs(5)).is_ok());
     }
 }
