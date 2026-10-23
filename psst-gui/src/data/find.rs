@@ -24,11 +24,6 @@ impl Finder {
         self.results = 0;
     }
 
-    pub fn report_match(&mut self) -> usize {
-        self.results += 1;
-        self.results
-    }
-
     pub fn focus_previous(&mut self) {
         self.focused_result = if self.focused_result > 0 {
             self.focused_result - 1

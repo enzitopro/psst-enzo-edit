@@ -271,10 +271,11 @@ impl PlayableIter for Arc<Album> {
         PlaybackOrigin::Album(self.link())
     }
 
-    fn for_each(&self, mut cb: impl FnMut(Playable, usize)) {
-        for (position, track) in self.clone().into_tracks_with_context().iter().enumerate() {
-            cb(Playable::Track(track.clone()), position);
-        }
+    fn get(&self, index: usize) -> Option<Playable> {
+        // The album's tracks don't say which album they're on.
+        let mut track = self.tracks.get(index)?.as_ref().clone();
+        track.album = Some(self.link());
+        Some(Playable::Track(Arc::new(track)))
     }
 
     fn count(&self) -> usize {

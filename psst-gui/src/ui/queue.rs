@@ -1,6 +1,6 @@
 use druid::{
     im::Vector,
-    widget::{Controller, CrossAxisAlignment, Either, Flex, Label, List, Scroll},
+    widget::{Controller, CrossAxisAlignment, Either, Flex, Label, Scroll},
     Env, Event, EventCtx, Lens, LensExt, Widget, WidgetExt,
 };
 
@@ -33,7 +33,7 @@ pub fn panel_widget() -> impl Widget<AppState> {
     let upcoming = Either::new(
         |upcoming: &WithCtx<Vector<QueueEntry>>, _| upcoming.data.is_empty(),
         placeholder("Nothing plays next"),
-        List::new(upcoming_row).controller(PlayNow::default()),
+        playable::PlayableList::new(upcoming_row, None).controller(PlayNow::default()),
     )
     .lens(shown(|playback| &playback.upcoming));
     let history = Either::new(
