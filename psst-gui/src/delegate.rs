@@ -30,7 +30,9 @@ pub struct Delegate {
 
 impl Delegate {
     pub fn new() -> Self {
-        const MAX_IMAGE_THREADS: usize = 32;
+        // Covers download in parallel: a few at once is enough, with only the
+        // rows in view built.
+        const MAX_IMAGE_THREADS: usize = 8;
 
         Self {
             main_window: None,
