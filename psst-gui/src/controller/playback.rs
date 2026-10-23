@@ -74,8 +74,11 @@ pub struct PlaybackController {
     output: Option<DefaultAudioOutput>,
     media_controls: Option<MediaControls>,
     has_scrobbled: bool,
-    /// The last session's track is loading, paused where it was.
-    restoring: bool,
+    /// The last session's track is loading, paused where it was, and whether
+    /// that session scrobbled it already.
+    restoring: Option<bool>,
+    /// The restored track tells Last.fm it's playing once resumed.
+    announce_on_resume: bool,
     scrobbler: Option<Scrobbler>,
     discord: DiscordPresence,
     startup: bool,
@@ -114,7 +117,8 @@ impl PlaybackController {
             output: None,
             media_controls: None,
             has_scrobbled: false,
-            restoring: false,
+            restoring: None,
+            announce_on_resume: false,
             scrobbler: None,
             discord: DiscordPresence::new(),
             startup: true,
@@ -597,13 +601,18 @@ where
             Event::Command(cmd) if cmd.is(cmd::PLAYBACK_PLAYING) => {
                 let (item, progress) = cmd.get_unchecked(cmd::PLAYBACK_PLAYING);
 
-                // Song has changed, so we reset the has_scrobbled value.  Not for
-                // the restored one, which isn't playing: the jump to where it was
-                // would scrobble it.
-                let restored = mem::take(&mut self.restoring);
-                self.has_scrobbled = restored;
-                if !restored {
-                    self.report_now_playing(&data.playback);
+                // Song has changed, so we reset the has_scrobbled value.  The
+                // restored one isn't playing yet: it's announced once resumed.
+                match self.restoring.take() {
+                    Some(scrobbled) => {
+                        self.has_scrobbled = scrobbled;
+                        self.announce_on_resume = true;
+                    }
+                    None => {
+                        self.has_scrobbled = false;
+                        self.announce_on_resume = false;
+                        self.report_now_playing(&data.playback);
+                    }
                 }
 
                 if let Some(queued) = data.queued_entry(*item) {
@@ -633,6 +642,9 @@ where
                 ctx.set_handled();
             }
             Event::Command(cmd) if cmd.is(cmd::PLAYBACK_RESUMING) => {
+                if mem::take(&mut self.announce_on_resume) {
+                    self.report_now_playing(&data.playback);
+                }
                 data.resume_playback();
                 self.update_media_control_playback(&data.playback);
                 ctx.set_handled();
@@ -774,6 +786,7 @@ where
             }
             Event::Command(cmd) if cmd.is(RESTORE_PLAYBACK) => {
                 if let Some(saved) = SavedPlayback::load() {
+                    self.restoring = Some(saved.scrobbled());
                     data.playback.queue = saved
                         .tracks
                         .into_iter()
@@ -782,7 +795,6 @@ where
                             origin: saved.origin.clone(),
                         })
                         .collect();
-                    self.restoring = true;
                     self.send(PlayerEvent::Command(PlayerCommand::LoadQueuePaused {
                         items: Self::playback_items(&data.playback.queue),
                         position: saved.position,
@@ -792,6 +804,8 @@ where
                 ctx.set_handled();
             }
             Event::Command(cmd) if cmd.is(cmd::PLAY_TRACKS) => {
+                // Played before the restored track loaded: that's no restore.
+                self.restoring = None;
                 let payload = cmd.get_unchecked(cmd::PLAY_TRACKS);
                 let (items, position) = without_hidden(payload, &data.common_ctx);
                 data.playback.queue = items

@@ -261,6 +261,14 @@ impl SavedPlayback {
         Config::config_dir().map(|dir| dir.join("playback.json"))
     }
 
+    /// Whether the last session scrobbled the playing track: Psst does once it
+    /// played half of it.
+    pub fn scrobbled(&self) -> bool {
+        self.tracks
+            .get(self.position)
+            .is_some_and(|track| Duration::from_millis(self.progress_ms) >= track.duration / 2)
+    }
+
     pub fn load() -> Option<Self> {
         let file = File::open(Self::path()?).ok()?;
         serde_json::from_reader(BufReader::new(file)).ok()

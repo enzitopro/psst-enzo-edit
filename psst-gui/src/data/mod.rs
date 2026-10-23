@@ -958,6 +958,13 @@ mod tests {
 
         let saved = SavedPlayback::of(&state.playback).unwrap();
         assert_eq!((saved.position, saved.progress_ms), (1, 42_000));
+        // 42 of 123 seconds: not scrobbled yet, it will be after the restore.
+        assert!(!saved.scrobbled());
+        let past_half = SavedPlayback {
+            progress_ms: 62_000,
+            ..SavedPlayback::of(&state.playback).unwrap()
+        };
+        assert!(past_half.scrobbled());
         let json = serde_json::to_string(&saved).unwrap();
         let loaded: SavedPlayback = serde_json::from_str(&json).unwrap();
         assert_eq!(serde_json::to_string(&loaded).unwrap(), json);
