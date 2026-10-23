@@ -32,7 +32,8 @@ pub struct Track {
     pub is_playable: Option<bool>,
     #[serde(default)]
     pub popularity: Option<u32>,
-    #[serde(skip)]
+    /// The position in the list it's from, gaps (unavailable items) included.
+    #[serde(default)]
     pub track_pos: usize,
     pub lyrics: Option<Arc<[TrackLines]>>,
 }

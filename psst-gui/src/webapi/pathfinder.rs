@@ -382,8 +382,9 @@ impl PlaylistResponse {
             .map_or(0, |content| content.total_count)
     }
 
-    /// Tracks of this page.  Local items are resolved against the local files
-    /// index, episodes and unknown items are skipped.
+    /// Tracks of this page, with their position in it.  Local items are
+    /// resolved against the local files index, episodes and unknown items are
+    /// skipped.
     pub fn into_tracks(self, local_library: Option<&LocalLibrary>) -> Vec<Arc<Track>> {
         let Some(content) = self.data.playlist.content else {
             return Vec::new();
@@ -391,25 +392,27 @@ impl PlaylistResponse {
         content
             .items
             .into_iter()
-            .flatten()
-            .filter_map(|item| {
-                let wrapper = item.item_v2?;
+            .enumerate()
+            .filter_map(|(position, item)| {
+                let wrapper = item?.item_v2?;
                 let data = wrapper.data?;
-                match wrapper.typename.as_str() {
+                let mut track = match wrapper.typename.as_str() {
                     "TrackResponseWrapper" => {
                         let track: PathfinderTrack = serde_json::from_value(data).ok()?;
-                        Some(Arc::new(track.into_track()?))
+                        Arc::new(track.into_track()?)
                     }
                     "LocalTrackResponseWrapper" => {
                         let local: PathfinderLocalTrack = serde_json::from_value(data).ok()?;
                         let item = local.into_local_item();
-                        Some(match local_library {
+                        match local_library {
                             Some(library) => library.track_for_item(&item, 0, 0),
                             None => Arc::new(super::local_library::local_track(&item, None, 0, 0)),
-                        })
+                        }
                     }
-                    _ => None,
-                }
+                    _ => return None,
+                };
+                Arc::make_mut(&mut track).track_pos = position;
+                Some(track)
             })
             .collect()
     }
@@ -871,6 +874,8 @@ mod tests {
 
         let tracks = response.into_tracks(None);
         assert_eq!(tracks.len(), 2);
+        // Their positions in the playlist, which moving them uses.
+        assert_eq!((tracks[0].track_pos, tracks[1].track_pos), (0, 1));
         assert_eq!(&*tracks[0].name, "Song");
         assert!(tracks[0].explicit);
         assert_eq!(tracks[0].artist_name().as_ref(), "Artist");

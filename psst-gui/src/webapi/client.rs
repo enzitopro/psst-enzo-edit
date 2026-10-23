@@ -918,16 +918,6 @@ fn playlist_from_json(mut value: serde_json::Value) -> Result<Playlist, Error> {
     Ok(serde_json::from_value(value)?)
 }
 
-/// Positions `tracks` in their order, which a copy from the cache doesn't keep.
-fn numbered(mut tracks: Vector<Arc<Track>>) -> Vector<Arc<Track>> {
-    for (position, track) in tracks.iter_mut().enumerate() {
-        if track.track_pos != position {
-            Arc::make_mut(track).track_pos = position;
-        }
-    }
-    tracks
-}
-
 /// The pages at `offsets`, in order, fetched by a couple of threads: a page at a
 /// time is slow for thousands of tracks, more threads made Spotify answer "too
 /// many requests".
@@ -1669,7 +1659,6 @@ impl WebApi {
     /// missing here shows as not liked (one account has 4000 of them).
     pub fn get_saved_tracks(&self) -> Result<Vector<Arc<Track>>, Error> {
         self.with_offline_copy("offline", "saved-tracks", || self.fetch_saved_tracks())
-            .map(numbered)
     }
 
     fn fetch_saved_tracks(&self) -> Result<Vector<Arc<Track>>, Error> {
@@ -2088,12 +2077,14 @@ impl WebApi {
         let offsets: Vec<_> = (PAGE_SIZE..total).step_by(PAGE_SIZE).collect();
         // Each page becomes tracks as it comes: holding the parsed responses of
         // 4000 liked songs until the last one took a few hundred MB.
-        let rest = fetch_pages(&offsets, |offset| Ok(page(offset)?.into_tracks(local)))?;
+        let rest = fetch_pages(&offsets, |offset| {
+            Ok((offset, page(offset)?.into_tracks(local)))
+        })?;
         let mut tracks = Vector::new();
-        for page_tracks in std::iter::once(first.into_tracks(local)).chain(rest) {
+        for (offset, page_tracks) in std::iter::once((0, first.into_tracks(local))).chain(rest) {
             for mut track in page_tracks {
-                // Keeps the playlist order for sorting by "date added".
-                Arc::make_mut(&mut track).track_pos = tracks.len();
+                // The position in the playlist: its order, and what moving it uses.
+                Arc::make_mut(&mut track).track_pos += offset;
                 tracks.push_back(track);
             }
         }
@@ -2157,9 +2148,7 @@ impl WebApi {
 
     /// The playlist's tracks, up to the paginated limit, for showing it.
     pub fn get_playlist_tracks(&self, id: &str) -> Result<Vector<Arc<Track>>, Error> {
-        let tracks =
-            self.with_offline_copy("offline-playlist", id, || self.playlist_tracks(id, false));
-        tracks.map(numbered)
+        self.with_offline_copy("offline-playlist", id, || self.playlist_tracks(id, false))
     }
 
     /// Every track of the playlist, for downloading or liking all of it.
@@ -2266,6 +2255,19 @@ impl WebApi {
             Some(json!({"uris": [track_uri]})),
         );
         self.send_empty_json(request)
+    }
+
+    /// Moves the item at `from` to before the one at `before`, positions in the
+    /// playlist's own order.
+    pub fn move_in_playlist(
+        &self,
+        playlist_id: &str,
+        from: usize,
+        before: usize,
+    ) -> Result<(), Error> {
+        let body = json!({ "range_start": from, "insert_before": before, "range_length": 1 });
+        let path = format!("v1/playlists/{playlist_id}/items");
+        self.send_empty_json(&RequestBuilder::new(path, Method::Put, Some(body)))
     }
 
     /// Adds tracks at the end of a playlist, in order, 100 per request.

@@ -286,7 +286,24 @@ fn popularity_stars(popularity: u32) -> String {
 }
 
 fn track_row_menu(row: &PlayRow<Arc<Track>>) -> Menu<AppState> {
-    track_menu(&row.item, &row.ctx.library, &row.origin)
+    let mut menu = track_menu(&row.item, &row.ctx.library, &row.origin);
+    // Rearranging needs the playlist in its own order: sorted or filtered,
+    // the rows aren't at their positions.
+    if let PlaybackOrigin::Playlist(link) = row.origin.as_ref() {
+        let writable = row.ctx.library.writable_playlists();
+        let editable = writable.iter().any(|playlist| playlist.id == link.id);
+        let position = row.item.track_pos;
+        if editable && row.position == position {
+            menu = menu.separator();
+            if position > 0 {
+                let up = playlist::MOVE_TRACK.with((link.clone(), position, true));
+                menu = menu.entry(MenuItem::new("Move Up").command(up));
+            }
+            let down = playlist::MOVE_TRACK.with((link.clone(), position, false));
+            menu = menu.entry(MenuItem::new("Move Down").command(down));
+        }
+    }
+    menu
 }
 
 pub fn track_menu(

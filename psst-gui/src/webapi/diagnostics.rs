@@ -1167,3 +1167,33 @@ fn diagnostics_rootlist_move() {
     assert_eq!(moved[4], before[3]);
     assert_eq!(restored, before);
 }
+
+/// Moves a track of `PSST_DIAG_PLAYLIST` (yours) one place down, and back.
+#[test]
+#[ignore]
+fn diagnostics_playlist_move_track() {
+    let mut config = Config::load().expect("Psst config not found, log in first");
+    init(&mut config);
+    let api = WebApi::global();
+    let id = std::env::var("PSST_DIAG_PLAYLIST").expect("PSST_DIAG_PLAYLIST");
+    let ids = |tracks: &druid::im::Vector<std::sync::Arc<Track>>| {
+        tracks
+            .iter()
+            .map(|t| (t.id, t.track_pos))
+            .take(4)
+            .collect::<Vec<_>>()
+    };
+    let before = api.get_all_playlist_tracks(&id).expect("tracks");
+    println!("before {:?}", ids(&before));
+    api.move_in_playlist(&id, 1, 3).expect("move down");
+    let moved = api.get_all_playlist_tracks(&id).expect("tracks");
+    println!("moved  {:?}", ids(&moved));
+    api.move_in_playlist(&id, 2, 1).expect("move back up");
+    let after = api.get_all_playlist_tracks(&id).expect("tracks");
+    println!("after  {:?}", ids(&after));
+    assert_eq!((moved[1].id, moved[2].id), (before[2].id, before[1].id));
+    let order = |tracks: &druid::im::Vector<std::sync::Arc<Track>>| {
+        tracks.iter().map(|t| t.id).collect::<Vec<_>>()
+    };
+    assert_eq!(order(&after), order(&before));
+}

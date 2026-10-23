@@ -44,6 +44,9 @@ pub const LOAD_DETAIL: Selector<(PlaylistLink, AppState)> =
     Selector::new("app.playlist.load-detail");
 pub const ADD_TRACK: Selector<PlaylistAddTrack> = Selector::new("app.playlist.add-track");
 pub const REMOVE_TRACK: Selector<PlaylistRemoveTrack> = Selector::new("app.playlist.remove-track");
+/// Moves the track at a position up (`true`) or down a place in the playlist.
+pub const MOVE_TRACK: Selector<(PlaylistLink, usize, bool)> =
+    Selector::new("app.playlist.move-track");
 /// Many tracks at once, from a selection.
 pub const ADD_TRACKS: Selector<(PlaylistLink, Vector<Arc<Track>>)> =
     Selector::new("app.playlist.add-tracks");
@@ -191,6 +194,18 @@ pub fn list_widget() -> impl Widget<AppState> {
             } else {
                 data.info_alert("Added to playlist.");
             }
+        },
+    )
+    .on_command_async(
+        MOVE_TRACK,
+        |(link, from, up)| {
+            let before = if up { from - 1 } else { from + 2 };
+            WebApi::global().move_in_playlist(&link.id, from, before)
+        },
+        |_, _: &mut AppState, _| {},
+        |ctx, data, ((link, _, _), result)| match result {
+            Ok(()) => ctx.submit_command(LOAD_DETAIL.with((link, data.clone()))),
+            Err(err) => data.error_alert(format!("Couldn't move the song: {err}")),
         },
     )
     .on_command_async(
