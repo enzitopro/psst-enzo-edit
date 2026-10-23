@@ -4,12 +4,12 @@ use crate::error::Error;
 use crate::{
     cmd,
     controller::{
-        AfterDelay, AlertCleanupController, LocalFilesController, NavController,
+        AlertCleanupController, LocalFilesController, NavController,
         SessionController, SortController,
     },
     data::{
-        config::SortOrder, Alert, AlertStyle, AppState, Config, Nav, Playable, Playback, Route,
-        ALERT_DURATION,
+        config::SortOrder, Alert, AlertStyle, AppState, Config, Nav, Playable, Playback,
+        PlaybackOrigin, PlaylistLink, Route,
     },
     webapi::WebApi,
     widget::{
@@ -333,12 +333,6 @@ fn alert_widget() -> impl Widget<AppState> {
                     },
                 )
             })
-            .controller(AfterDelay::new(
-                ALERT_DURATION,
-                |ctx, alert: &mut Alert, _| {
-                    ctx.submit_command(DISMISS_ALERT.with(alert.id));
-                },
-            ))
     })
     .lens(AppState::alerts)
     .on_command(DISMISS_ALERT, |_, &id, state| {
@@ -415,7 +409,7 @@ fn route_widget() -> impl Widget<AppState> {
 /// What to do with the tracks picked with Ctrl and Shift clicks.
 fn selection_bar() -> impl Widget<AppState> {
     let selected = |data: &AppState| -> Vector<Arc<Track>> {
-        data.common_ctx.selected.values().cloned().collect()
+        data.common_ctx.selection().into_iter().collect()
     };
     let action = |label: &str| {
         Label::new(label)
@@ -434,6 +428,39 @@ fn selection_bar() -> impl Widget<AppState> {
         ctx.submit_command(library::LIKE_TRACKS.with(selected(data)));
         data.common_ctx_mut().selected.clear();
     });
+    let queue = action("Queue").on_left_click(move |ctx, _, data: &mut AppState, _| {
+        let origin = selection_origin(&data.nav);
+        for track in selected(data) {
+            ctx.submit_command(track::add_to_queue_command(&track, &origin));
+        }
+        data.common_ctx_mut().selected.clear();
+    });
+    let add_to_playlist =
+        action("Add to Playlist").on_left_click(move |ctx, mouse, data: &mut AppState, _| {
+            let tracks = selected(data);
+            let mut menu = Menu::<AppState>::new("Add to Playlist");
+            for playlist in data.library.writable_playlists() {
+                let add = playlist::ADD_TRACKS.with((playlist.link(), tracks.clone()));
+                menu = menu.entry(MenuItem::new(playlist.name.to_string()).command(add));
+            }
+            ctx.show_context_menu(menu, mouse.window_pos);
+        });
+    // Out of the list on screen: Liked Songs, or a playlist you can edit.
+    let remove = Either::new(
+        |data: &AppState, _| removal(data).is_some(),
+        action("Remove").on_left_click(move |ctx, _, data: &mut AppState, _| {
+            let tracks = selected(data);
+            match removal(data) {
+                Some(Some(link)) => {
+                    ctx.submit_command(playlist::REMOVE_TRACKS.with((link, tracks)))
+                }
+                Some(None) => ctx.submit_command(library::UNLIKE_TRACKS.with(tracks)),
+                None => return,
+            }
+            data.common_ctx_mut().selected.clear();
+        }),
+        Empty,
+    );
     let clear = action("Clear").on_left_click(|_, _, data: &mut AppState, _| {
         data.common_ctx_mut().selected.clear();
     });
@@ -445,8 +472,11 @@ fn selection_bar() -> impl Widget<AppState> {
             .with_text_size(theme::TEXT_SIZE_SMALL),
         )
         .with_flex_spacer(1.0)
-        .with_child(download)
+        .with_child(queue)
+        .with_child(add_to_playlist)
         .with_child(like)
+        .with_child(remove)
+        .with_child(download)
         .with_child(clear)
         .padding(Insets::uniform_xy(theme::grid(2.0), theme::grid(0.5)))
         .background(Border::Top.with_color(theme::GREY_500));
@@ -458,6 +488,32 @@ fn selection_bar() -> impl Widget<AppState> {
     .on_command(cmd::SELECT_TRACKS, |_, (tracks, range), data| {
         data.common_ctx_mut().select(tracks, *range);
     })
+}
+
+/// Where removing selected tracks takes them out of: the playlist on screen when
+/// you can edit it (`Some(Some)`), Liked Songs (`Some(None)`), or nowhere.
+fn removal(data: &AppState) -> Option<Option<PlaylistLink>> {
+    match &data.nav {
+        Nav::SavedTracks | Nav::ArtistSavedTracks(_) => Some(None),
+        Nav::PlaylistDetail(link) => {
+            let writable = data.library.writable_playlists();
+            writable
+                .iter()
+                .any(|p| p.id == link.id)
+                .then(|| Some(link.clone()))
+        }
+        _ => None,
+    }
+}
+
+/// What queued tracks say they play from.
+fn selection_origin(nav: &Nav) -> PlaybackOrigin {
+    match nav {
+        Nav::SavedTracks => PlaybackOrigin::Library,
+        Nav::PlaylistDetail(link) => PlaybackOrigin::Playlist(link.clone()),
+        Nav::AlbumDetail(link, _) => PlaybackOrigin::Album(link.clone()),
+        _ => PlaybackOrigin::Home,
+    }
 }
 
 fn download_status_widget() -> impl Widget<AppState> {

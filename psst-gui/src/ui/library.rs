@@ -29,6 +29,7 @@ pub const SAVE_TRACK: Selector<Arc<Track>> = Selector::new("app.library.save-tra
 /// Like every track of a playlist or an album.
 pub const LIKE_PLAYLIST: Selector<PlaylistLink> = Selector::new("app.library.like-playlist");
 pub const LIKE_TRACKS: Selector<Vector<Arc<Track>>> = Selector::new("app.library.like-tracks");
+pub const UNLIKE_TRACKS: Selector<Vector<Arc<Track>>> = Selector::new("app.library.unlike-tracks");
 pub const LIKE_ALBUM: Selector<AlbumLink> = Selector::new("app.library.like-album");
 pub const UNSAVE_TRACK: Selector<TrackId> = Selector::new("app.library.unsave-track");
 
@@ -172,6 +173,26 @@ fn liked_all(data: &mut AppState, result: Result<Vector<Arc<Track>>, Error>) {
 /// Saved Tracks page isn't, so liking a track from another page used to do nothing.
 pub fn saved_tracks_loader() -> impl Widget<AppState> {
     Empty
+        .on_command_async(
+            UNLIKE_TRACKS,
+            |tracks| {
+                let tracks: Vector<_> = tracks.into_iter().filter(|t| !t.is_local).collect();
+                let list: Vec<_> = tracks.iter().cloned().collect();
+                WebApi::global().unsave_tracks(&list).map(|()| tracks)
+            },
+            |_, _: &mut AppState, _| {},
+            |_, data, (_, result)| match result {
+                Ok(tracks) => {
+                    data.with_library_mut(|library| {
+                        for track in &tracks {
+                            library.remove_track(&track.id);
+                        }
+                    });
+                    data.info_alert(format!("Removed {} songs from Liked Songs", tracks.len()));
+                }
+                Err(err) => data.error_alert(format!("Couldn't remove the songs: {err}")),
+            },
+        )
         .on_command_async(
             LIKE_TRACKS,
             |tracks| like_all(Ok(tracks)),

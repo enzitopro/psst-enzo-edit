@@ -339,6 +339,31 @@ pub fn play_buttons<T: PlayableIter + 'static>(
         .with_child(playback::queue_behavior_widget().lens(AppState::playback))
 }
 
+/// Selects the track at `clicked` (Ctrl+click), or the ones from `anchor`, the
+/// last Ctrl+click, to it (Shift+click, `range`).
+pub fn select(
+    ctx: &mut EventCtx,
+    list: &impl PlayableIter,
+    anchor: &mut Option<usize>,
+    clicked: usize,
+    range: bool,
+) {
+    let from = if range {
+        anchor.unwrap_or(clicked)
+    } else {
+        *anchor = Some(clicked);
+        clicked
+    };
+    let rows = from.min(clicked)..=from.max(clicked);
+    let mut tracks = Vec::new();
+    list.for_each(|item, position| {
+        if let (true, Playable::Track(track)) = (rows.contains(&position), item) {
+            tracks.push(track);
+        }
+    });
+    ctx.submit_command(cmd::SELECT_TRACKS.with((tracks, range)));
+}
+
 #[derive(Default)]
 struct PlayController {
     /// Where a Shift+click range starts: the last Ctrl+click.
@@ -367,20 +392,7 @@ where
                     ctx.set_handled();
                 }
                 if let Some(&(clicked, range)) = note.get(cmd::SELECT) {
-                    let from = if range {
-                        self.anchor.unwrap_or(clicked)
-                    } else {
-                        self.anchor = Some(clicked);
-                        clicked
-                    };
-                    let rows = from.min(clicked)..=from.max(clicked);
-                    let mut tracks = Vec::new();
-                    data.data.for_each(|item, position| {
-                        if let (true, Playable::Track(track)) = (rows.contains(&position), item) {
-                            tracks.push(track);
-                        }
-                    });
-                    ctx.submit_command(cmd::SELECT_TRACKS.with((tracks, range)));
+                    select(ctx, &data.data, &mut self.anchor, clicked, range);
                     ctx.set_handled();
                 }
             }

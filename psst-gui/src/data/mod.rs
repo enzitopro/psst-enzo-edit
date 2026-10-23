@@ -64,7 +64,9 @@ pub use crate::data::{
 };
 use crate::ui::credits::TrackCredits;
 
-pub const ALERT_DURATION: Duration = Duration::from_secs(5);
+/// How long alerts show: a confirmation briefly, an error long enough to read.
+const INFO_ALERT_DURATION: Duration = Duration::from_millis(1500);
+const ERROR_ALERT_DURATION: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Data, Lens)]
 pub struct AppState {
@@ -449,8 +451,13 @@ impl AppState {
 
     pub fn cleanup_alerts(&mut self) {
         let now = Instant::now();
-        self.alerts
-            .retain(|alert| now.duration_since(alert.created_at) < ALERT_DURATION);
+        self.alerts.retain(|alert| {
+            let duration = match alert.style {
+                AlertStyle::Info => INFO_ALERT_DURATION,
+                AlertStyle::Error => ERROR_ALERT_DURATION,
+            };
+            now.duration_since(alert.created_at) < duration
+        });
     }
 }
 
@@ -659,18 +666,18 @@ impl Library {
         }
     }
 
-    pub fn increment_playlist_track_count(&mut self, link: &PlaylistLink) {
+    pub fn increment_playlist_track_count(&mut self, link: &PlaylistLink, by: usize) {
         if let Some(saved) = self.playlists.resolved_mut() {
             if let Some(playlist) = saved.iter_mut().find(|p| p.id == link.id) {
-                playlist.track_count = playlist.track_count.map(|count| count + 1);
+                playlist.track_count = playlist.track_count.map(|count| count + by);
             }
         }
     }
 
-    pub fn decrement_playlist_track_count(&mut self, link: &PlaylistLink) {
+    pub fn decrement_playlist_track_count(&mut self, link: &PlaylistLink, by: usize) {
         if let Some(saved) = self.playlists.resolved_mut() {
             if let Some(playlist) = saved.iter_mut().find(|p| p.id == link.id) {
-                playlist.track_count = playlist.track_count.map(|count| count.saturating_sub(1));
+                playlist.track_count = playlist.track_count.map(|count| count.saturating_sub(by));
             }
         }
     }
@@ -756,6 +763,13 @@ pub struct CommonCtx {
 }
 
 impl CommonCtx {
+    /// The selected tracks, in the order of the list they're from.
+    pub fn selection(&self) -> Vec<Arc<Track>> {
+        let mut tracks: Vec<_> = self.selected.values().cloned().collect();
+        tracks.sort_by_key(|t| (t.track_pos, t.disc_number, t.track_number));
+        tracks
+    }
+
     /// A Ctrl+click toggles its track, a Shift+click range only adds.
     pub fn select(&mut self, tracks: &[Arc<Track>], range: bool) {
         for track in tracks {
@@ -1014,9 +1028,33 @@ mod tests {
         common.select(&[track(2)], false);
         assert!(!common.selected.contains_key(&track(2).id));
         assert_eq!(common.selected.len(), 2);
+        // Acted on in the list's order, whatever the clicks' order.
+        let mut late = (*track(9)).clone();
+        late.track_pos = 7;
+        state.common_ctx_mut().select(&[Arc::new(late)], false);
+        let order: Vec<_> = state
+            .common_ctx
+            .selection()
+            .iter()
+            .map(|t| t.track_pos)
+            .collect();
+        assert!(order.windows(2).all(|pair| pair[0] <= pair[1]));
         // Leaving the page drops it.
         state.navigate(&Nav::SavedTracks);
         assert!(state.common_ctx.selected.is_empty());
+    }
+
+    #[test]
+    fn confirmations_go_quickly_errors_stay() {
+        let mut state = AppState::default_with_config(Config::default());
+        state.info_alert("Added");
+        state.error_alert("Failed");
+        for alert in state.alerts.iter_mut() {
+            alert.created_at -= Duration::from_secs(2);
+        }
+        state.cleanup_alerts();
+        let left: Vec<_> = state.alerts.iter().map(|a| a.style.clone()).collect();
+        assert!(matches!(left[..], [AlertStyle::Error]));
     }
 
     #[test]

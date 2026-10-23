@@ -4,7 +4,7 @@ use std::time::Duration;
 
 pub struct AlertCleanupController;
 
-const CLEANUP_INTERVAL: Duration = Duration::from_secs(1);
+const CLEANUP_INTERVAL: Duration = Duration::from_millis(500);
 
 impl<W: Widget<AppState>> Controller<AppState, W> for AlertCleanupController {
     fn event(

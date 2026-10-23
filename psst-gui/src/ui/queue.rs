@@ -33,7 +33,7 @@ pub fn panel_widget() -> impl Widget<AppState> {
     let upcoming = Either::new(
         |upcoming: &WithCtx<Vector<QueueEntry>>, _| upcoming.data.is_empty(),
         placeholder("Nothing plays next"),
-        List::new(upcoming_row).controller(PlayNow),
+        List::new(upcoming_row).controller(PlayNow::default()),
     )
     .lens(shown(|playback| &playback.upcoming));
     let history = Either::new(
@@ -101,7 +101,11 @@ fn upcoming_row() -> impl Widget<PlayRow<Playable>> {
 }
 
 /// A click on an upcoming row plays it right away, without replacing the queue.
-struct PlayNow;
+/// Also selects, like the other lists.
+#[derive(Default)]
+struct PlayNow {
+    anchor: Option<usize>,
+}
 
 impl<W: Widget<WithCtx<Vector<QueueEntry>>>> Controller<WithCtx<Vector<QueueEntry>>, W>
     for PlayNow
@@ -117,6 +121,11 @@ impl<W: Widget<WithCtx<Vector<QueueEntry>>>> Controller<WithCtx<Vector<QueueEntr
         if let Event::Notification(note) = event {
             if let Some(&clicked) = note.get(cmd::PLAY) {
                 ctx.submit_command(cmd::EDIT_QUEUE.with(QueueEdit::PlayNow(clicked)));
+                ctx.set_handled();
+                return;
+            }
+            if let Some(&(clicked, range)) = note.get(cmd::SELECT) {
+                playable::select(ctx, &data.data, &mut self.anchor, clicked, range);
                 ctx.set_handled();
                 return;
             }

@@ -446,7 +446,7 @@ pub fn hide_entries(track: &Track, library: &Library) -> Vec<MenuItem<AppState>>
     ]
 }
 
-fn add_to_queue_command(track: &Arc<Track>, origin: &PlaybackOrigin) -> Command {
+pub fn add_to_queue_command(track: &Arc<Track>, origin: &PlaybackOrigin) -> Command {
     cmd::ADD_TO_QUEUE.with((
         QueueEntry {
             item: crate::ui::Playable::Track(track.clone()),

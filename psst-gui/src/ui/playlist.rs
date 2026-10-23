@@ -1,6 +1,7 @@
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 
 use druid::{
+    im::Vector,
     lens::Map,
     widget::{Button, Either, Flex, Label, LensWrap, LineBreaking, List, TextBox},
     Insets, Lens, LensExt, LocalizedString, Menu, MenuItem, Selector, Size, UnitPoint, Widget,
@@ -11,7 +12,7 @@ use crate::{
     cmd,
     data::{
         sort_tracks, AppState, Ctx, Library, Nav, Playlist, PlaylistAddTrack, PlaylistDetail,
-        PlaylistLink, PlaylistRemoveTrack, PlaylistTracks, WithCtx, CUSTOM_ORDER,
+        PlaylistLink, PlaylistRemoveTrack, PlaylistTracks, Track, WithCtx, CUSTOM_ORDER,
     },
     error::Error,
     webapi::WebApi,
@@ -41,6 +42,11 @@ pub const LOAD_DETAIL: Selector<(PlaylistLink, AppState)> =
     Selector::new("app.playlist.load-detail");
 pub const ADD_TRACK: Selector<PlaylistAddTrack> = Selector::new("app.playlist.add-track");
 pub const REMOVE_TRACK: Selector<PlaylistRemoveTrack> = Selector::new("app.playlist.remove-track");
+/// Many tracks at once, from a selection.
+pub const ADD_TRACKS: Selector<(PlaylistLink, Vector<Arc<Track>>)> =
+    Selector::new("app.playlist.add-tracks");
+pub const REMOVE_TRACKS: Selector<(PlaylistLink, Vector<Arc<Track>>)> =
+    Selector::new("app.playlist.remove-tracks");
 
 pub const FOLLOW_PLAYLIST: Selector<Playlist> = Selector::new("app.playlist.follow");
 pub const UNFOLLOW_PLAYLIST: Selector<PlaylistLink> = Selector::new("app.playlist.unfollow");
@@ -150,7 +156,7 @@ pub fn list_widget() -> impl Widget<AppState> {
             )
         },
         |_, data, d| {
-            data.with_library_mut(|library| library.increment_playlist_track_count(&d.link))
+            data.with_library_mut(|library| library.increment_playlist_track_count(&d.link, 1))
         },
         |_, data, (_, r)| {
             if let Err(err) = r {
@@ -158,6 +164,41 @@ pub fn list_widget() -> impl Widget<AppState> {
             } else {
                 data.info_alert("Added to playlist.");
             }
+        },
+    )
+    .on_command_async(
+        ADD_TRACKS,
+        |(link, tracks)| {
+            let uris = spotify_uris(&tracks);
+            WebApi::global()
+                .add_tracks_to_playlist(&link.id, &uris)
+                .map(|()| uris.len())
+        },
+        |_, _: &mut AppState, _| {},
+        |_, data, ((link, _), result)| match result {
+            Ok(added) => {
+                data.with_library_mut(|l| l.increment_playlist_track_count(&link, added));
+                data.info_alert(format!("Added {added} songs to \"{}\"", link.name));
+            }
+            Err(err) => data.error_alert(format!("Couldn't add the songs: {err}")),
+        },
+    )
+    .on_command_async(
+        REMOVE_TRACKS,
+        |(link, tracks)| {
+            let uris = spotify_uris(&tracks);
+            WebApi::global()
+                .remove_tracks_from_playlist(&link.id, &uris)
+                .map(|()| uris.len())
+        },
+        |_, _: &mut AppState, _| {},
+        |ctx, data, ((link, _), result)| match result {
+            Ok(removed) => {
+                data.with_library_mut(|l| l.decrement_playlist_track_count(&link, removed));
+                data.info_alert(format!("Removed {removed} songs from \"{}\"", link.name));
+                ctx.submit_command(LOAD_DETAIL.with((link, data.clone())));
+            }
+            Err(err) => data.error_alert(format!("Couldn't remove the songs: {err}")),
         },
     )
     .on_command_async(
@@ -245,7 +286,7 @@ pub fn list_widget() -> impl Widget<AppState> {
         REMOVE_TRACK,
         |d| WebApi::global().remove_track_from_playlist(&d.link.id, &d.track_uri),
         |_, data, d| {
-            data.with_library_mut(|library| library.decrement_playlist_track_count(&d.link))
+            data.with_library_mut(|library| library.decrement_playlist_track_count(&d.link, 1))
         },
         |e, data, (p, r)| {
             if let Err(err) = r {
@@ -750,4 +791,13 @@ fn playlist_menu_ctx(playlist: &WithCtx<Playlist>) -> Menu<AppState> {
 struct UnfollowPlaylist {
     link: PlaylistLink,
     created_by_user: bool,
+}
+
+/// The Spotify URIs of `tracks`, leaving out local files, which have none.
+fn spotify_uris(tracks: &Vector<Arc<Track>>) -> Vec<String> {
+    tracks
+        .iter()
+        .filter(|track| !track.is_local)
+        .filter_map(|track| track.id.0.to_uri())
+        .collect()
 }

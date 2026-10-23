@@ -1728,6 +1728,15 @@ impl WebApi {
 
     /// Adds tracks to Liked Songs, 40 per request (the endpoint's limit).
     pub fn save_tracks(&self, tracks: &[Arc<Track>]) -> Result<(), Error> {
+        self.library_tracks(Method::Put, tracks)
+    }
+
+    /// Removes tracks from Liked Songs.
+    pub fn unsave_tracks(&self, tracks: &[Arc<Track>]) -> Result<(), Error> {
+        self.library_tracks(Method::Delete, tracks)
+    }
+
+    fn library_tracks(&self, method: Method, tracks: &[Arc<Track>]) -> Result<(), Error> {
         for chunk in tracks.chunks(40) {
             let uris: Vec<_> = chunk
                 .iter()
@@ -1736,7 +1745,7 @@ impl WebApi {
                         .into_owned()
                 })
                 .collect();
-            let request = &RequestBuilder::new("v1/me/library", Method::Put, None)
+            let request = &RequestBuilder::new("v1/me/library", method.clone(), None)
                 .query("uris", uris.join(","));
             self.send_empty_json(request)?;
         }
@@ -2238,6 +2247,32 @@ impl WebApi {
             Some(json!({"uris": [track_uri]})),
         );
         self.send_empty_json(request)
+    }
+
+    /// Adds tracks at the end of a playlist, in order, 100 per request.
+    pub fn add_tracks_to_playlist(&self, playlist_id: &str, uris: &[String]) -> Result<(), Error> {
+        for chunk in uris.chunks(100) {
+            let path = format!("v1/playlists/{playlist_id}/items");
+            let request = &RequestBuilder::new(path, Method::Post, Some(json!({ "uris": chunk })));
+            self.send_empty_json(request)?;
+        }
+        Ok(())
+    }
+
+    /// Removes every occurrence of the tracks from a playlist, 100 per request.
+    pub fn remove_tracks_from_playlist(
+        &self,
+        playlist_id: &str,
+        uris: &[String],
+    ) -> Result<(), Error> {
+        for chunk in uris.chunks(100) {
+            let items: Vec<_> = chunk.iter().map(|uri| json!({ "uri": uri })).collect();
+            let path = format!("v1/playlists/{playlist_id}/items");
+            let request =
+                &RequestBuilder::new(path, Method::Delete, Some(json!({ "items": items })));
+            self.send_empty_json(request)?;
+        }
+        Ok(())
     }
 
     // https://developer.spotify.com/documentation/web-api/reference/remove-playlist-items
