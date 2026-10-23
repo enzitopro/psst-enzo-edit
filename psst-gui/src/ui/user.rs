@@ -1,7 +1,9 @@
+use std::time::Duration;
+
 use druid::{
     commands,
-    widget::{Either, Flex, Label},
-    Data, LensExt, Selector, Widget, WidgetExt,
+    widget::{Controller, Either, Flex, Label},
+    Data, Env, Event, EventCtx, LensExt, Selector, TimerToken, Widget, WidgetExt,
 };
 
 use crate::{
@@ -14,9 +16,33 @@ use super::theme;
 
 pub const LOAD_PROFILE: Selector = Selector::new("app.user.load-profile");
 
+struct Recheck(TimerToken);
+
+impl<W: Widget<AppState>> Controller<AppState, W> for Recheck {
+    fn event(
+        &mut self,
+        child: &mut W,
+        ctx: &mut EventCtx,
+        event: &Event,
+        data: &mut AppState,
+        env: &Env,
+    ) {
+        match event {
+            Event::WindowConnected => self.0 = ctx.request_timer(RECHECK_EVERY),
+            Event::Timer(token) if *token == self.0 => {
+                ctx.request_update();
+                self.0 = ctx.request_timer(RECHECK_EVERY);
+            }
+            _ => {}
+        }
+        child.event(ctx, event, data, env)
+    }
+}
+
+const RECHECK_EVERY: Duration = Duration::from_secs(3);
+
 pub fn user_widget() -> impl Widget<AppState> {
     let is_connected = Either::new(
-        // TODO: Avoid the locking here.
         |state: &AppState, _| state.session.is_connected(),
         Label::new("Connected")
             .with_text_color(theme::PLACEHOLDER_COLOR)
@@ -24,7 +50,10 @@ pub fn user_widget() -> impl Widget<AppState> {
         Label::new("Disconnected")
             .with_text_color(theme::PLACEHOLDER_COLOR)
             .with_text_size(theme::TEXT_SIZE_SMALL),
-    );
+    )
+    // The session connects on its own, which changes no data: asks again now
+    // and then, or it said "Disconnected" until something else changed.
+    .controller(Recheck(TimerToken::INVALID));
 
     let user_profile = Async::new(
         || Empty,
