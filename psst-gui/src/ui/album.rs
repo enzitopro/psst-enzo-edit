@@ -17,7 +17,7 @@ use crate::{
     widget::{icons, Async, MyWidgetExt, RemoteImage, Wrap},
 };
 
-use super::{artist, library, playable, theme, track, utils};
+use super::{artist, library, playable, playlist, theme, track, utils};
 
 pub const LOAD_DETAIL: Selector<AlbumLink> = Selector::new("app.album.load-detail");
 
@@ -242,6 +242,16 @@ fn album_menu(album: &Arc<Album>, library: &Arc<Library>) -> Menu<AppState> {
         )
         .command(library::LIKE_ALBUM.with(album.link())),
     );
+    let mut playlist_menu = Menu::new(
+        LocalizedString::new("menu-item-add-to-playlist").with_placeholder("Add to Playlist"),
+    );
+    for playlist in library.writable_playlists() {
+        playlist_menu = playlist_menu.entry(
+            MenuItem::new(playlist.name.to_string())
+                .command(playlist::ADD_ALBUM.with((playlist.link(), album.link()))),
+        );
+    }
+    menu = menu.entry(playlist_menu);
 
     menu = menu.separator();
 

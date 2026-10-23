@@ -13,8 +13,9 @@ use druid::{
 use crate::{
     cmd,
     data::{
-        sort_tracks, AppState, Ctx, Library, Nav, Playlist, PlaylistAddTrack, PlaylistDetail,
-        PlaylistLink, PlaylistRemoveTrack, PlaylistTracks, Track, WithCtx, CUSTOM_ORDER,
+        sort_tracks, AlbumLink, AppState, Ctx, Library, Nav, Playlist, PlaylistAddTrack,
+        PlaylistDetail, PlaylistLink, PlaylistRemoveTrack, PlaylistTracks, Track, WithCtx,
+        CUSTOM_ORDER,
     },
     error::Error,
     webapi::WebApi,
@@ -50,6 +51,8 @@ pub const MOVE_TRACK: Selector<(PlaylistLink, usize, bool)> =
 /// Many tracks at once, from a selection.
 pub const ADD_TRACKS: Selector<(PlaylistLink, Vector<Arc<Track>>)> =
     Selector::new("app.playlist.add-tracks");
+/// All the songs of an album.
+pub const ADD_ALBUM: Selector<(PlaylistLink, AlbumLink)> = Selector::new("app.playlist.add-album");
 pub const REMOVE_TRACKS: Selector<(PlaylistLink, Vector<Arc<Track>>)> =
     Selector::new("app.playlist.remove-tracks");
 
@@ -217,13 +220,18 @@ pub fn list_widget() -> impl Widget<AppState> {
                 .map(|()| uris.len())
         },
         |_, _: &mut AppState, _| {},
-        |_, data, ((link, _), result)| match result {
-            Ok(added) => {
-                data.with_library_mut(|l| l.increment_playlist_track_count(&link, added));
-                data.info_alert(format!("Added {added} songs to \"{}\"", link.name));
-            }
-            Err(err) => data.error_alert(format!("Couldn't add the songs: {err}")),
+        |_, data, ((link, _), result)| added_tracks(data, &link, result),
+    )
+    .on_command_async(
+        ADD_ALBUM,
+        |(link, album)| {
+            let uris = spotify_uris(&WebApi::global().get_album(&album.id)?.data.tracks);
+            WebApi::global()
+                .add_tracks_to_playlist(&link.id, &uris)
+                .map(|()| uris.len())
         },
+        |_, _: &mut AppState, _| {},
+        |_, data, ((link, _), result)| added_tracks(data, &link, result),
     )
     .on_command_async(
         REMOVE_TRACKS,
@@ -870,6 +878,16 @@ struct UnfollowPlaylist {
 }
 
 /// The Spotify URIs of `tracks`, leaving out local files, which have none.
+fn added_tracks(data: &mut AppState, link: &PlaylistLink, result: Result<usize, Error>) {
+    match result {
+        Ok(added) => {
+            data.with_library_mut(|l| l.increment_playlist_track_count(link, added));
+            data.info_alert(format!("Added {added} songs to \"{}\"", link.name));
+        }
+        Err(err) => data.error_alert(format!("Couldn't add the songs: {err}")),
+    }
+}
+
 fn spotify_uris(tracks: &Vector<Arc<Track>>) -> Vec<String> {
     tracks
         .iter()
