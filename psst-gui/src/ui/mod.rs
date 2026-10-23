@@ -202,7 +202,11 @@ fn root_widget() -> impl Widget<AppState> {
         .must_fill_main_axis(true)
         .with_child(sidebar_menu_widget())
         .with_default_spacer()
-        .with_child(playlist::sort_widget())
+        .with_child(
+            Flex::row()
+                .with_flex_child(playlist::sort_widget(), 1.0)
+                .with_child(playlist::new_playlist_widget()),
+        )
         .with_flex_child(playlists, 1.0);
 
     let controls = Flex::column()

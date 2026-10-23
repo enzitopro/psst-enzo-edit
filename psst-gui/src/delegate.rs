@@ -7,7 +7,7 @@ use std::fs;
 use threadpool::ThreadPool;
 
 use crate::ui::playlist::{
-    RENAME_PLAYLIST, RENAME_PLAYLIST_CONFIRM, UNFOLLOW_PLAYLIST, UNFOLLOW_PLAYLIST_CONFIRM,
+    SAVE_PLAYLIST, SAVE_PLAYLIST_CONFIRM, UNFOLLOW_PLAYLIST, UNFOLLOW_PLAYLIST_CONFIRM,
 };
 use crate::ui::theme;
 use crate::ui::DOWNLOAD_ARTWORK;
@@ -196,8 +196,8 @@ impl AppDelegate<AppState> for Delegate {
         } else if let Some(link) = cmd.get(UNFOLLOW_PLAYLIST_CONFIRM) {
             ctx.submit_command(UNFOLLOW_PLAYLIST.with(link.clone()));
             Handled::Yes
-        } else if let Some(link) = cmd.get(RENAME_PLAYLIST_CONFIRM) {
-            ctx.submit_command(RENAME_PLAYLIST.with(link.clone()));
+        } else if let Some(details) = cmd.get(SAVE_PLAYLIST_CONFIRM) {
+            ctx.submit_command(SAVE_PLAYLIST.with(details.clone()));
             Handled::Yes
         } else if cmd.is(cmd::QUIT_APP_WITH_SAVE) {
             ctx.submit_command(commands::QUIT_APP);

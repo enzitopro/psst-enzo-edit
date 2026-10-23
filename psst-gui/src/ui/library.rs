@@ -9,8 +9,8 @@ use druid::{
 use crate::{
     cmd,
     data::{
-        Album, AlbumLink, AppState, Artist, CommonCtx, Ctx, Library, Nav, PlaylistLink, Promise,
-        SavedAlbums, SavedTracks, Show, ShowLink, Track, TrackId, WithCtx,
+        Album, AlbumLink, AppState, Artist, ArtistLink, CommonCtx, Ctx, Library, Nav, PlaylistLink,
+        Promise, SavedAlbums, SavedTracks, Show, ShowLink, Track, TrackId, WithCtx,
     },
     error::Error,
     ui::home::{shows_that_you_might_like, your_shows},
@@ -23,6 +23,8 @@ use super::{album, artist, playable, theme, track, utils};
 pub const LOAD_TRACKS: Selector = Selector::new("app.library.load-tracks");
 pub const LOAD_ALBUMS: Selector = Selector::new("app.library.load-albums");
 pub const LOAD_ARTISTS: Selector = Selector::new("app.library.load-artists");
+/// Follows (`true`) or unfollows an artist.
+pub const FOLLOW_ARTIST: Selector<(ArtistLink, bool)> = Selector::new("app.library.follow-artist");
 pub const LOAD_SHOWS: Selector = Selector::new("app.library.load-shows");
 
 pub const SAVE_TRACK: Selector<Arc<Track>> = Selector::new("app.library.save-track");
@@ -125,19 +127,6 @@ pub fn followed_artists_widget() -> impl Widget<AppState> {
             artists(true),
             artists(false),
         ))
-        .on_command_async(
-            LOAD_ARTISTS,
-            |_| WebApi::global().get_followed_artists(),
-            |_, data, _| {
-                // A refresh keeps showing what's there.
-                if !data.library.followed_artists.is_resolved() {
-                    data.with_library_mut(|library| library.followed_artists.defer_default());
-                }
-            },
-            |_, data, (_, result)| {
-                data.with_library_mut(|library| refreshed(&mut library.followed_artists, result))
-            },
-        )
 }
 
 /// Puts a load's result in place, except a failed refresh, which keeps the old data.
@@ -173,6 +162,41 @@ fn liked_all(data: &mut AppState, result: Result<Vector<Arc<Track>>, Error>) {
 /// Saved Tracks page isn't, so liking a track from another page used to do nothing.
 pub fn saved_tracks_loader() -> impl Widget<AppState> {
     Empty
+        // Here, always there: the artist pages need them too.
+        .on_command_async(
+            LOAD_ARTISTS,
+            |_| WebApi::global().get_followed_artists(),
+            |_, data: &mut AppState, _| {
+                // A refresh keeps showing what's there.
+                if !data.library.followed_artists.is_resolved() {
+                    data.with_library_mut(|library| library.followed_artists.defer_default());
+                }
+            },
+            |_, data, (_, result)| {
+                data.with_library_mut(|library| refreshed(&mut library.followed_artists, result))
+            },
+        )
+        .on_command_async(
+            FOLLOW_ARTIST,
+            |(artist, follow)| WebApi::global().follow_artist(&artist.id, follow),
+            |_, _: &mut AppState, _| {},
+            |ctx, data, ((artist, follow), result)| match result {
+                Ok(()) if follow => {
+                    // For the picture on the Artists page.
+                    ctx.submit_command(LOAD_ARTISTS);
+                    data.info_alert(format!("Following {}", artist.name));
+                }
+                Ok(()) => {
+                    data.with_library_mut(|library| {
+                        if let Some(artists) = library.followed_artists.resolved_mut() {
+                            artists.retain(|a| a.id != artist.id);
+                        }
+                    });
+                    data.info_alert(format!("Unfollowed {}", artist.name));
+                }
+                Err(err) => data.error_alert(format!("Couldn't follow: {err}")),
+            },
+        )
         .on_command_async(
             UNLIKE_TRACKS,
             |tracks| {

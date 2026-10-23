@@ -2127,6 +2127,13 @@ impl WebApi {
         Ok(())
     }
 
+    /// Follows (`true`) or unfollows an artist.
+    pub fn follow_artist(&self, id: &str, follow: bool) -> Result<(), Error> {
+        let method = if follow { Method::Put } else { Method::Delete };
+        let request = &library_request(method, &format!("spotify:artist:{id}"));
+        self.send_empty_json(request)
+    }
+
     pub fn unfollow_playlist(&self, id: &str) -> Result<(), Error> {
         let request = &library_request(Method::Delete, &format!("spotify:playlist:{id}"));
         self.send_empty_json(request)?;
@@ -2232,11 +2239,23 @@ impl WebApi {
     }
 
     // https://developer.spotify.com/documentation/web-api/reference/change-playlist-details
-    pub fn change_playlist_details(&self, id: &str, name: &str) -> Result<(), Error> {
+    pub fn change_playlist_details(
+        &self,
+        id: &str,
+        name: &str,
+        description: &str,
+    ) -> Result<(), Error> {
         let request = &RequestBuilder::new(format!("v1/playlists/{id}"), Method::Put, None)
-            .set_body(Some(json!({ "name": name })));
+            .set_body(Some(json!({ "name": name, "description": description })));
         self.send_empty_json(request)?;
         Ok(())
+    }
+
+    // https://developer.spotify.com/documentation/web-api/reference/create-playlist
+    pub fn create_playlist(&self, name: &str, description: &str) -> Result<(), Error> {
+        let body = json!({ "name": name, "description": description });
+        let request = &RequestBuilder::new("v1/me/playlists", Method::Post, Some(body));
+        self.send_empty_json(request)
     }
 
     // https://developer.spotify.com/documentation/web-api/reference/add-items-to-playlist

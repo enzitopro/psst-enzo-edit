@@ -639,11 +639,12 @@ impl Library {
         }
     }
 
-    pub fn rename_playlist(&mut self, link: PlaylistLink) {
+    pub fn change_playlist_details(&mut self, link: PlaylistLink, description: Arc<str>) {
         if let Some(saved) = self.playlists.resolved_mut() {
             for playlist in saved.iter_mut() {
                 if playlist.id == link.id {
                     playlist.name = link.name;
+                    playlist.description = description;
                     break;
                 }
             }

@@ -19,7 +19,7 @@ use crate::{
 };
 
 use super::{
-    album, playable, theme, track,
+    album, library, playable, theme, track,
     utils::{self},
 };
 
@@ -27,9 +27,35 @@ pub const LOAD_DETAIL: Selector<ArtistLink> = Selector::new("app.artist.load-det
 
 pub fn detail_widget() -> impl Widget<AppState> {
     Flex::column()
+        .cross_axis_alignment(CrossAxisAlignment::Start)
+        .with_child(follow_widget().padding((theme::grid(2.0), theme::grid(1.0))))
         .with_child(async_artist_info().padding((theme::grid(1.0), 0.0)))
         .with_child(async_albums_widget().padding((theme::grid(1.0), 0.0)))
         .with_child(async_related_widget().padding((theme::grid(1.0), 0.0)))
+}
+
+/// Follow or Unfollow, for the artist on screen.
+fn follow_widget() -> impl Widget<AppState> {
+    let following = |data: &AppState| -> Option<(ArtistLink, bool)> {
+        let Nav::ArtistDetail(artist) = &data.nav else {
+            return None;
+        };
+        let followed = data.library.followed_artists.resolved()?;
+        Some((artist.clone(), followed.iter().any(|a| a.id == artist.id)))
+    };
+    Either::new(
+        move |data: &AppState, _| following(data).is_some(),
+        Button::dynamic(move |data: &AppState, _| match following(data) {
+            Some((_, true)) => "Unfollow".to_string(),
+            _ => "Follow".to_string(),
+        })
+        .on_click(move |ctx, data: &mut AppState, _| {
+            if let Some((artist, followed)) = following(data) {
+                ctx.submit_command(library::FOLLOW_ARTIST.with((artist, !followed)));
+            }
+        }),
+        Empty,
+    )
 }
 
 /// The artist's tracks in the library, like a playlist: play them, download

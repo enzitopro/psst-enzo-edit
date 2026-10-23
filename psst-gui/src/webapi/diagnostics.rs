@@ -341,7 +341,7 @@ fn diagnostics_library_edits() {
     let playlist = api.get_playlist(&id).expect("playlist detail");
     println!(
         "rename to same name:  {:?}",
-        api.change_playlist_details(&id, &playlist.name)
+        api.change_playlist_details(&id, &playlist.name, &playlist.description)
     );
 }
 

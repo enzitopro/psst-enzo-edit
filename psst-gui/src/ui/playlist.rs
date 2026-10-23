@@ -3,9 +3,11 @@ use std::{cell::RefCell, rc::Rc, sync::Arc};
 use druid::{
     im::Vector,
     lens::Map,
-    widget::{Button, Either, Flex, Label, LensWrap, LineBreaking, List, TextBox},
-    Insets, Lens, LensExt, LocalizedString, Menu, MenuItem, Selector, Size, UnitPoint, Widget,
-    WidgetExt, WindowDesc,
+    widget::{
+        Button, CrossAxisAlignment, Either, Flex, Label, LensWrap, LineBreaking, List, TextBox,
+    },
+    Data, Insets, Lens, LensExt, LocalizedString, Menu, MenuItem, Selector, Size, UnitPoint,
+    Widget, WidgetExt, WindowDesc,
 };
 
 use crate::{
@@ -53,14 +55,39 @@ pub const UNFOLLOW_PLAYLIST: Selector<PlaylistLink> = Selector::new("app.playlis
 pub const UNFOLLOW_PLAYLIST_CONFIRM: Selector<PlaylistLink> =
     Selector::new("app.playlist.unfollow-confirm");
 
-pub const RENAME_PLAYLIST: Selector<PlaylistLink> = Selector::new("app.playlist.rename");
-pub const RENAME_PLAYLIST_CONFIRM: Selector<PlaylistLink> =
+/// Creates a playlist, or changes one's name and description.
+pub const SAVE_PLAYLIST: Selector<PlaylistDetails> = Selector::new("app.playlist.save");
+pub const SAVE_PLAYLIST_CONFIRM: Selector<PlaylistDetails> =
     Selector::new("app.playlist.rename-confirm");
 
-const SHOW_RENAME_PLAYLIST_CONFIRM: Selector<PlaylistLink> =
-    Selector::new("app.playlist.show-rename");
+/// A playlist to create (no `id`) or to change, with what the dialog says.
+#[derive(Clone, Data)]
+pub struct PlaylistDetails {
+    pub id: Option<Arc<str>>,
+    pub name: Arc<str>,
+    pub description: Arc<str>,
+}
+
+const SHOW_PLAYLIST_DETAILS: Selector<PlaylistDetails> = Selector::new("app.playlist.show-rename");
 const SHOW_UNFOLLOW_PLAYLIST_CONFIRM: Selector<UnfollowPlaylist> =
     Selector::new("app.playlist.show-unfollow-confirm");
+
+/// "New Playlist" over the sidebar's playlists.
+pub fn new_playlist_widget() -> impl Widget<AppState> {
+    Label::new("+ New")
+        .with_text_size(theme::TEXT_SIZE_SMALL)
+        .with_text_color(theme::PLACEHOLDER_COLOR)
+        .padding(Insets::uniform_xy(theme::grid(2.0), theme::grid(0.6)))
+        .link()
+        .on_left_click(|ctx, _, _: &mut AppState, _| {
+            let details = PlaylistDetails {
+                id: None,
+                name: "".into(),
+                description: "".into(),
+            };
+            ctx.submit_command(SHOW_PLAYLIST_DETAILS.with(details));
+        })
+}
 
 /// "Sort: Recents" over the sidebar's playlists, a click picks another order.
 pub fn sort_widget() -> impl Widget<AppState> {
@@ -226,14 +253,31 @@ pub fn list_widget() -> impl Widget<AppState> {
         },
     )
     .on_command_async(
-        RENAME_PLAYLIST,
-        |link| WebApi::global().change_playlist_details(link.id.as_ref(), link.name.as_ref()),
-        |_, data: &mut AppState, link| data.with_library_mut(|l| l.rename_playlist(link)),
-        |_, data: &mut AppState, (_, r)| {
-            if let Err(err) = r {
-                data.error_alert(err);
-            } else {
-                data.info_alert("Playlist renamed.")
+        SAVE_PLAYLIST,
+        |details| match &details.id {
+            Some(id) => {
+                WebApi::global().change_playlist_details(id, &details.name, &details.description)
+            }
+            None => WebApi::global().create_playlist(&details.name, &details.description),
+        },
+        |_, _: &mut AppState, _| {},
+        |ctx, data: &mut AppState, (details, r)| match (r, details.id) {
+            (Err(err), _) => data.error_alert(err),
+            (Ok(()), Some(id)) => {
+                let link = PlaylistLink {
+                    id: id.clone(),
+                    name: details.name,
+                };
+                let description = details.description;
+                data.with_library_mut(|l| l.change_playlist_details(link, description));
+                if matches!(&data.nav, Nav::PlaylistDetail(open) if open.id == id) {
+                    ctx.submit_command(cmd::NAVIGATE_REFRESH);
+                }
+                data.info_alert("Playlist saved.");
+            }
+            (Ok(()), None) => {
+                ctx.submit_command(LOAD_LIST.with(data.config.playlist_order.clone()));
+                data.info_alert(format!("Created \"{}\"", details.name));
             }
         },
     )
@@ -278,9 +322,8 @@ pub fn list_widget() -> impl Widget<AppState> {
             Err(err) => data.error_alert(format!("Couldn't move the playlist: {err}")),
         },
     )
-    .on_command(SHOW_RENAME_PLAYLIST_CONFIRM, |ctx, link, _| {
-        let window = rename_playlist_window(link.clone());
-        ctx.new_window(window);
+    .on_command(SHOW_PLAYLIST_DETAILS, |ctx, details, _| {
+        ctx.new_window(playlist_details_window(details.clone()));
     })
     .on_command_async(
         REMOVE_TRACK,
@@ -340,10 +383,15 @@ fn unfollow_playlist_confirm_widget(msg: UnfollowPlaylist) -> impl Widget<AppSta
     )
 }
 
-fn rename_playlist_window(link: PlaylistLink) -> WindowDesc<AppState> {
-    WindowDesc::new(rename_playlist_widget(link))
-        .window_size((theme::grid(45.0), theme::grid(30.0)))
-        .title("Rename playlist")
+fn playlist_details_window(details: PlaylistDetails) -> WindowDesc<AppState> {
+    let title = if details.id.is_some() {
+        "Edit details"
+    } else {
+        "New playlist"
+    };
+    WindowDesc::new(playlist_details_widget(details))
+        .window_size((theme::grid(45.0), theme::grid(42.0)))
+        .title(title)
         .resizable(false)
         .show_title(false)
         .transparent_titlebar(true)
@@ -364,34 +412,43 @@ impl Lens<AppState, String> for TextInput {
     }
 }
 
-fn rename_playlist_widget(link: PlaylistLink) -> impl Widget<AppState> {
-    let text_input = TextInput {
-        input: Rc::new(RefCell::new(link.name.to_string())),
+fn playlist_details_widget(details: PlaylistDetails) -> impl Widget<AppState> {
+    let text = |text: &str| TextInput {
+        input: Rc::new(RefCell::new(text.to_string())),
     };
-
-    let information_section = information_section(
-        "Rename playlist?",
-        "Please enter a new name for your playlist",
-    );
-    let input_section = LensWrap::new(
-        TextBox::new()
+    let (name, description) = (text(&details.name), text(&details.description));
+    let (title, action) = if details.id.is_some() {
+        ("Edit details", "Save")
+    } else {
+        ("New playlist", "Create")
+    };
+    let input = |label: &str, text: TextInput| {
+        Flex::column()
+            .cross_axis_alignment(CrossAxisAlignment::Start)
+            .with_child(Label::new(label).with_text_size(theme::TEXT_SIZE_SMALL))
+            .with_spacer(theme::grid(0.5))
+            .with_child(LensWrap::new(TextBox::new().expand_width(), text))
             .padding_horizontal(theme::grid(2.0))
-            .expand_width(),
-        text_input.clone(),
-    );
+    };
     let button_section = button_section(
-        "Rename",
-        RENAME_PLAYLIST_CONFIRM,
-        Box::new(move || PlaylistLink {
-            id: link.id.clone(),
-            name: Arc::from(text_input.input.borrow().clone().into_boxed_str()),
+        action,
+        SAVE_PLAYLIST_CONFIRM,
+        Box::new({
+            let (name, description) = (name.clone(), description.clone());
+            move || PlaylistDetails {
+                id: details.id.clone(),
+                name: name.input.borrow().trim().into(),
+                description: description.input.borrow().trim().into(),
+            }
         }),
     );
 
     ThemeScope::new(
         Flex::column()
-            .with_child(information_section)
-            .with_child(input_section)
+            .with_child(information_section(title, ""))
+            .with_child(input("Name", name))
+            .with_spacer(theme::grid(1.5))
+            .with_child(input("Description", description))
             .with_flex_spacer(2.0)
             .with_child(button_section)
             .with_flex_spacer(2.0)
@@ -399,10 +456,10 @@ fn rename_playlist_widget(link: PlaylistLink) -> impl Widget<AppState> {
     )
 }
 
-fn button_section(
+fn button_section<P: Send + 'static>(
     action_button_name: &str,
-    selector: Selector<PlaylistLink>,
-    link_extractor: Box<dyn Fn() -> PlaylistLink>,
+    selector: Selector<P>,
+    link_extractor: Box<dyn Fn() -> P>,
 ) -> impl Widget<AppState> {
     let action_button = Button::new(action_button_name)
         .fix_height(theme::grid(5.0))
@@ -755,12 +812,16 @@ fn playlist_menu_ctx(playlist: &WithCtx<Playlist>) -> Menu<AppState> {
                 )
                 .command(SHOW_UNFOLLOW_PLAYLIST_CONFIRM.with(unfollow_msg)),
             );
+            let details = PlaylistDetails {
+                id: Some(playlist.id.clone()),
+                name: playlist.name.clone(),
+                description: playlist.description.clone(),
+            };
             menu = menu.entry(
                 MenuItem::new(
-                    LocalizedString::new("menu-rename-playlist")
-                        .with_placeholder("Rename playlist"),
+                    LocalizedString::new("menu-rename-playlist").with_placeholder("Edit details"),
                 )
-                .command(SHOW_RENAME_PLAYLIST_CONFIRM.with(playlist.link())),
+                .command(SHOW_PLAYLIST_DETAILS.with(details)),
             );
         } else {
             let unfollow_msg = UnfollowPlaylist {

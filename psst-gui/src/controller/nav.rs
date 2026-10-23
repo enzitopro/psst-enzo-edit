@@ -92,6 +92,10 @@ impl NavController {
                 }
             }
             Nav::ArtistDetail(link) => {
+                // For the Follow button.
+                if data.library.followed_artists.needs_loading() {
+                    ctx.submit_command(library::LOAD_ARTISTS);
+                }
                 if !data.artist_detail.artist.contains(link) {
                     ctx.submit_command(artist::LOAD_DETAIL.with(link.to_owned()));
                 }
