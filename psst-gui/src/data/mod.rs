@@ -92,6 +92,8 @@ pub struct AppState {
     pub lyrics_search: LyricsSearch,
     /// The small lyrics panel over the main window.
     pub lyrics_panel_open: bool,
+    /// The user scrolled the lyrics away from the line being sung, to read.
+    pub lyrics_scrolled: bool,
     /// The queue next to the page.
     pub queue_panel_open: bool,
     /// The main window is the mini player, on top of other windows.
@@ -200,6 +202,7 @@ impl AppState {
             lyrics: Promise::Empty,
             lyrics_search: LyricsSearch::default(),
             lyrics_panel_open: false,
+            lyrics_scrolled: false,
             queue_panel_open: false,
             mini_mode: false,
             mini_lyrics_open: false,

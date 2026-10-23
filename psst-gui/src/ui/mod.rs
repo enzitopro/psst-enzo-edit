@@ -436,9 +436,8 @@ fn route_widget() -> impl Widget<AppState> {
             Route::Home => Scroll::new(home::home_widget().padding(theme::grid(1.0)))
                 .vertical()
                 .boxed(),
-            Route::Lyrics => Scroll::new(lyrics::lyrics_widget().padding(theme::grid(1.0)))
-                .vertical()
-                .boxed(),
+            // It scrolls itself, to follow the singing.
+            Route::Lyrics => lyrics::lyrics_widget().padding(theme::grid(1.0)).boxed(),
             Route::SavedTracks => Flex::column()
                 .with_child(
                     find::finder_widget(cmd::FIND_IN_SAVED_TRACKS, "Find in Saved Tracks...")

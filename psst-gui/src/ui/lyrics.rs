@@ -1,17 +1,20 @@
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use druid::widget::{
-    Button, Container, CrossAxisAlignment, Flex, Label, LineBreaking, List, Scroll, TextBox,
+    Button, Container, Controller, CrossAxisAlignment, Flex, Label, LineBreaking, List, Scroll,
+    TextBox,
 };
 use druid::{
-    lens::Map, widget::Either, Data, FontDescriptor, FontFamily, FontWeight, Insets, LensExt,
-    Selector, Widget, WidgetExt,
+    commands::SCROLL_TO_VIEW, lens::Map, widget::Either, BoxConstraints, Data, Env, Event,
+    EventCtx, FontDescriptor, FontFamily, FontWeight, Insets, LayoutCtx, LensExt, LifeCycle,
+    LifeCycleCtx, PaintCtx, Selector, Size, TimerToken, UnitPoint, UpdateCtx, Widget, WidgetExt,
 };
 
 use crate::cmd;
 use crate::controller::InputController;
 use crate::data::{
-    AppState, Ctx, Lyrics, LyricsCandidate, LyricsSearch, NowPlaying, Playable, TrackLines,
+    AppState, Ctx, Lyrics, LyricsCandidate, LyricsSearch, NowPlaying, Playable, PlaybackState,
+    TrackLines,
 };
 use crate::error::Error;
 use crate::widget::{Empty, MyWidgetExt};
@@ -23,13 +26,14 @@ use super::utils;
 pub const SHOW_LYRICS: Selector<NowPlaying> = Selector::new("app.home.show_lyrics");
 const SEARCH_LYRICS: Selector<String> = Selector::new("app.lyrics.search");
 const CHOOSE_LYRICS: Selector<LyricsCandidate> = Selector::new("app.lyrics.choose");
+/// Scrolls back to the line being sung, and keeps it in view again.
+const FOLLOW_LYRICS: Selector = Selector::new("app.lyrics.follow");
 
-/// Playback progress is reported about once a second, so highlight lines a
-/// bit early to not lag behind the singing.
-const HIGHLIGHT_LOOKAHEAD: Duration = Duration::from_millis(400);
+/// Lines light up a beat early, as reading one takes a moment.
+const HIGHLIGHT_LOOKAHEAD: Duration = Duration::from_millis(150);
 
 pub fn lyrics_widget() -> impl Widget<AppState> {
-    Scroll::new(
+    lyrics_scroll(
         Container::new(
             Flex::column()
                 .cross_axis_alignment(CrossAxisAlignment::Center)
@@ -45,7 +49,61 @@ pub fn lyrics_widget() -> impl Widget<AppState> {
         .expand_width()
         .padding(Insets::uniform_xy(theme::grid(4.0), 0.0)),
     )
-    .vertical()
+}
+
+/// The lyrics in a scroll that keeps the line being sung in view, until the
+/// user scrolls away to read, with a way back under it.
+fn lyrics_scroll(content: impl Widget<AppState> + 'static) -> impl Widget<AppState> {
+    let back = Either::new(
+        |data: &AppState, _| {
+            data.lyrics_scrolled && data.lyrics.resolved().is_some_and(|lyrics| lyrics.synced)
+        },
+        Label::new("Back to the current line")
+            .with_text_size(theme::TEXT_SIZE_SMALL)
+            .padding(Insets::uniform_xy(theme::grid(1.5), theme::grid(0.75)))
+            .link()
+            .rounded(theme::BUTTON_BORDER_RADIUS)
+            .border(theme::GREY_500, 1.0)
+            .on_left_click(|ctx, _, _, _| ctx.submit_command(FOLLOW_LYRICS))
+            .padding(theme::grid(1.0))
+            .align_horizontal(UnitPoint::CENTER),
+        Empty,
+    );
+    // Under the lines, not over them, so a click on it doesn't reach a line.
+    Flex::column()
+        .with_flex_child(
+            Scroll::new(content.controller(FollowCurrentLine)).vertical(),
+            1.0,
+        )
+        .with_child(back)
+}
+
+/// Stops scrolling to the line being sung once the user scrolls, until asked.
+struct FollowCurrentLine;
+
+impl<W: Widget<AppState>> Controller<AppState, W> for FollowCurrentLine {
+    fn event(
+        &mut self,
+        child: &mut W,
+        ctx: &mut EventCtx,
+        event: &Event,
+        data: &mut AppState,
+        env: &Env,
+    ) {
+        match event {
+            // shortcut: dragging the scroll bar doesn't count, as the scroll
+            // keeps those events; watch its offset if that's missed.
+            Event::Wheel(_) => data.lyrics_scrolled = true,
+            Event::Command(cmd) if cmd.is(FOLLOW_LYRICS) => data.lyrics_scrolled = false,
+            Event::Notification(note) if note.is(SCROLL_TO_VIEW) && data.lyrics_scrolled => {
+                // Keeps the scroll above from moving.
+                ctx.set_handled();
+                return;
+            }
+            _ => {}
+        }
+        child.event(ctx, event, data, env)
+    }
 }
 
 fn track_info_widget() -> impl Widget<AppState> {
@@ -200,6 +258,7 @@ fn search_results_widget() -> impl Widget<AppState> {
 #[derive(Clone, Data)]
 struct Playhead {
     progress: Duration,
+    playing: bool,
     synced: bool,
 }
 
@@ -212,6 +271,7 @@ fn playhead_lens() -> impl druid::Lens<AppState, Playhead> {
                 .as_ref()
                 .map(|np| np.progress)
                 .unwrap_or_default(),
+            playing: data.playback.state == PlaybackState::Playing,
             synced: data.lyrics.resolved().is_some_and(|lyrics| lyrics.synced),
         },
         |_, _| {
@@ -235,6 +295,116 @@ fn line_position(line: &Ctx<Playhead, TrackLines>) -> std::cmp::Ordering {
 
 fn is_current_line(line: &Ctx<Playhead, TrackLines>) -> bool {
     line.ctx.synced && line_position(line).is_eq()
+}
+
+/// Moves the playhead on between the player's reports, about one a second, so
+/// each line lights up right as it's sung.
+struct FollowSinging<W> {
+    child: W,
+    /// The lyrics as the lines get them, the playhead moved on.
+    shown: Option<Ctx<Playhead, Lyrics>>,
+    /// The last progress reported, and when.
+    reported: (Duration, Instant),
+    /// Wakes up at the next line's start or end.
+    timer: TimerToken,
+}
+
+impl<W> FollowSinging<W> {
+    fn new(child: W) -> Self {
+        Self {
+            child,
+            shown: None,
+            reported: (Duration::ZERO, Instant::now()),
+            timer: TimerToken::INVALID,
+        }
+    }
+}
+
+/// How long until a line starts or ends, if the lyrics are synced and playing.
+fn next_line_change(lyrics: &Ctx<Playhead, Lyrics>) -> Option<Duration> {
+    if !(lyrics.ctx.synced && lyrics.ctx.playing) {
+        return None;
+    }
+    let at = (lyrics.ctx.progress + HIGHLIGHT_LOOKAHEAD).as_millis() as u64;
+    let next = (lyrics.data.lines.iter())
+        .flat_map(|line| [line.start_ms(), line.end_ms()])
+        // The last line ends at u64::MAX, never.
+        .filter(|&ms| ms > at && ms != u64::MAX)
+        .min()?;
+    Some(Duration::from_millis(next - at))
+}
+
+impl<W: Widget<Ctx<Playhead, Lyrics>>> Widget<Ctx<Playhead, Lyrics>> for FollowSinging<W> {
+    fn event(
+        &mut self,
+        ctx: &mut EventCtx,
+        event: &Event,
+        data: &mut Ctx<Playhead, Lyrics>,
+        env: &Env,
+    ) {
+        if matches!(event, Event::Timer(token) if *token == self.timer) {
+            ctx.request_update();
+            return;
+        }
+        // The lines only read it.
+        let mut shown = self.shown.clone().unwrap_or_else(|| data.clone());
+        self.child.event(ctx, event, &mut shown, env);
+    }
+
+    fn lifecycle(
+        &mut self,
+        ctx: &mut LifeCycleCtx,
+        event: &LifeCycle,
+        data: &Ctx<Playhead, Lyrics>,
+        env: &Env,
+    ) {
+        if let LifeCycle::WidgetAdded = event {
+            self.reported = (data.ctx.progress, Instant::now());
+            self.shown = Some(data.clone());
+        }
+        let shown = self.shown.as_ref().unwrap_or(data);
+        self.child.lifecycle(ctx, event, shown, env);
+    }
+
+    fn update(
+        &mut self,
+        ctx: &mut UpdateCtx,
+        old_data: &Ctx<Playhead, Lyrics>,
+        data: &Ctx<Playhead, Lyrics>,
+        env: &Env,
+    ) {
+        let (old, new) = (&old_data.ctx, &data.ctx);
+        if old.progress != new.progress || old.playing != new.playing {
+            self.reported = (new.progress, Instant::now());
+        }
+        let mut shown = data.clone();
+        if new.playing {
+            shown.ctx.progress = self.reported.0 + self.reported.1.elapsed();
+        }
+        let old_shown = self.shown.as_ref().unwrap_or(old_data);
+        self.child.update(ctx, old_shown, &shown, env);
+        self.timer = match next_line_change(&shown) {
+            Some(wait) => ctx.request_timer(wait),
+            None => TimerToken::INVALID,
+        };
+        self.shown = Some(shown);
+    }
+
+    fn layout(
+        &mut self,
+        ctx: &mut LayoutCtx,
+        bc: &BoxConstraints,
+        data: &Ctx<Playhead, Lyrics>,
+        env: &Env,
+    ) -> Size {
+        let shown = self.shown.as_ref().unwrap_or(data);
+        self.child.layout(ctx, bc, shown, env)
+    }
+
+    fn paint(&mut self, ctx: &mut PaintCtx, data: &Ctx<Playhead, Lyrics>, env: &Env) {
+        self.child
+            .paint(ctx, self.shown.as_ref().unwrap_or(data), env)
+    }
 }
 
 /// Big bold lines, like Spotify.  The sung lines stay readable, the current
@@ -290,10 +460,16 @@ fn lyrics_line_widget(style: LineStyle) -> impl Widget<Ctx<Playhead, TrackLines>
                 ctx.scroll_area_to_view(ctx.size().to_rect().inflate(0.0, style.scroll_margin));
             }
         })
+        .on_command(FOLLOW_LYRICS, move |ctx, _, line| {
+            if is_current_line(line) {
+                ctx.scroll_area_to_view(ctx.size().to_rect().inflate(0.0, style.scroll_margin));
+            }
+        })
         .on_left_click(|ctx, _, line, _| {
             let start = line.data.start_ms();
             if start != 0 {
                 ctx.submit_command(cmd::SKIP_TO_POSITION.with(start));
+                ctx.submit_command(FOLLOW_LYRICS);
             }
         })
 }
@@ -302,11 +478,10 @@ fn lyrics_lines_widget(style: LineStyle) -> impl Widget<AppState> {
     Async::new(
         utils::spinner_widget,
         move || {
+            let lines = List::new(move || lyrics_line_widget(style)).lens(Ctx::map(Lyrics::lines));
             Flex::column()
                 .cross_axis_alignment(CrossAxisAlignment::Start)
-                .with_child(
-                    List::new(move || lyrics_line_widget(style)).lens(Ctx::map(Lyrics::lines)),
-                )
+                .with_child(FollowSinging::new(lines))
                 .with_spacer(theme::grid(2.0))
                 .with_child(
                     Label::dynamic(|lyrics: &Ctx<Playhead, Lyrics>, _| {
@@ -350,6 +525,7 @@ pub fn lyrics_loader<W: Widget<AppState> + 'static>(widget: W) -> impl Widget<Ap
         },
         |_, data, np| {
             data.lyrics.defer(());
+            data.lyrics_scrolled = false;
             // Start a manual search from the track, in case it's needed.
             data.lyrics_search.results.clear();
             data.lyrics_search.query = match &np.item {
@@ -366,13 +542,17 @@ pub fn lyrics_loader<W: Widget<AppState> + 'static>(widget: W) -> impl Widget<Ap
 /// browsing.
 /// The lyrics under the mini player's controls.
 pub fn mini_player_lyrics() -> impl Widget<AppState> {
-    Scroll::new(lyrics_lines_widget(PANEL_STYLE).padding(Insets::new(
+    panel_lines()
+}
+
+/// The lyrics in small print, for the panel and the mini player.
+fn panel_lines() -> impl Widget<AppState> {
+    lyrics_scroll(lyrics_lines_widget(PANEL_STYLE).padding(Insets::new(
         theme::grid(0.5),
         0.0,
         theme::grid(0.5),
         theme::grid(1.5),
     )))
-    .vertical()
     .expand()
 }
 
@@ -404,20 +584,41 @@ pub fn lyrics_panel() -> impl Widget<AppState> {
             theme::grid(1.0),
             theme::grid(0.5),
         ));
-    let lines = Scroll::new(lyrics_lines_widget(PANEL_STYLE).padding(Insets::new(
-        theme::grid(0.5),
-        0.0,
-        theme::grid(0.5),
-        theme::grid(1.5),
-    )))
-    .vertical()
-    .expand();
     let panel = Flex::column()
         .with_child(header)
-        .with_flex_child(lines, 1.0)
+        .with_flex_child(panel_lines(), 1.0)
         .fix_size(theme::grid(42.0), theme::grid(30.0))
         .background(theme::BACKGROUND_DARK)
         .rounded(theme::GRID)
         .border(theme::GREY_500, 1.0);
     Either::new(|data: &AppState, _| data.lyrics_panel_open, panel, Empty)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wakes_up_when_the_next_line_starts() {
+        let line = |start: u64| TrackLines {
+            start_time_ms: start.to_string(),
+            words: "la".to_string(),
+            end_time_ms: "0".to_string(),
+        };
+        let lyrics = Lyrics::new([line(1000), line(3000)], "test");
+        let at = |ms: u64, playing| {
+            let progress = Duration::from_millis(ms) - HIGHLIGHT_LOOKAHEAD;
+            let playhead = Playhead {
+                progress,
+                playing,
+                synced: true,
+            };
+            next_line_change(&Ctx::new(playhead, lyrics.clone()))
+        };
+        assert_eq!(at(400, true), Some(Duration::from_millis(600)));
+        assert_eq!(at(1000, true), Some(Duration::from_millis(2000)));
+        // The last line lasts to the end.
+        assert_eq!(at(3500, true), None);
+        assert_eq!(at(400, false), None);
+    }
 }
