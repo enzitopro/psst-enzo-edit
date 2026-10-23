@@ -136,8 +136,8 @@ fn keep_min_size(window: &druid::WindowHandle) {
     ));
 }
 
-/// The window turned into the mini player.
-const MINI_PLAYER_SIZE: (f64, f64) = (theme::GRID * 60.0, theme::GRID * 22.0);
+/// The window turned into the mini player, its title bar included.
+pub const MINI_PLAYER_SIZE: (f64, f64) = (theme::GRID * 60.0, theme::GRID * 26.0);
 
 pub fn main_window(config: &Config) -> WindowDesc<AppState> {
     WindowDesc::new(root_widget())
@@ -351,6 +351,7 @@ fn root_widget() -> impl Widget<AppState> {
     )
     .on_command(cmd::TOGGLE_MINI_PLAYER, |ctx, _, data: &mut AppState| {
         data.mini_mode = !data.mini_mode;
+        data.mini_lyrics_open = false;
         FULL_LAYOUT.store(!data.mini_mode, Ordering::Relaxed);
         let window = ctx.window();
         window.set_always_on_top(data.mini_mode);

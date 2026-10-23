@@ -5,8 +5,8 @@ use druid::{
     lens::Map,
     widget::{CrossAxisAlignment, Either, Flex, Label, LineBreaking, Spinner, ViewSwitcher},
     BoxConstraints, Cursor, Data, Env, Event, EventCtx, LayoutCtx, LensExt, LifeCycle,
-    LifeCycleCtx, Menu, MouseButton, PaintCtx, Point, Rect, RenderContext, Size, Target, UpdateCtx,
-    Widget, WidgetExt, WidgetPod,
+    LifeCycleCtx, Menu, MouseButton, PaintCtx, Point, Rect, RenderContext, Selector, Size, Target,
+    UpdateCtx, Widget, WidgetExt, WidgetPod,
 };
 use itertools::Itertools;
 
@@ -43,10 +43,12 @@ pub fn panel_widget() -> impl Widget<AppState> {
         })
 }
 
+/// Shows or hides the lyrics under the mini player.
+const TOGGLE_MINI_LYRICS: Selector = Selector::new("app.mini-player.toggle-lyrics");
+
 /// The playback bar alone, for the window as a mini player, and the lyrics
 /// under it on demand.
 pub fn mini_player_widget() -> impl Widget<AppState> {
-    const WIDTH: f64 = theme::GRID * 60.0;
     let seek_bar = Maybe::or_empty(SeekBar::new).lens(Playback::now_playing);
     let item_info = Maybe::or_empty(playing_item_widget).lens(Playback::now_playing);
     let controls = Either::new(
@@ -56,32 +58,6 @@ pub fn mini_player_widget() -> impl Widget<AppState> {
             .with_text_color(theme::PLACEHOLDER_COLOR)
             .padding(theme::grid(2.0)),
     );
-    let lyrics = Label::dynamic(|data: &AppState, _| {
-        if data.mini_lyrics_open {
-            "Hide Lyrics".to_string()
-        } else {
-            "Show Lyrics".to_string()
-        }
-    })
-    .with_text_size(theme::TEXT_SIZE_SMALL)
-    .padding((theme::grid(1.0), theme::grid(0.5)))
-    .link()
-    .rounded(theme::BUTTON_BORDER_RADIUS)
-    .on_left_click(|ctx, _, data: &mut AppState, _| {
-        data.mini_lyrics_open = !data.mini_lyrics_open;
-        // The window grows down to fit them.
-        let height = if data.mini_lyrics_open {
-            theme::grid(60.0)
-        } else {
-            theme::grid(22.0)
-        };
-        let width = ctx.window().get_size().width.max(WIDTH);
-        ctx.window().set_size(Size::new(width, height));
-        if let (true, Some(now_playing)) = (data.mini_lyrics_open, &data.playback.now_playing) {
-            let show = lyrics::SHOW_LYRICS.with(now_playing.clone());
-            ctx.submit_command(show.to(Target::Global));
-        }
-    });
     Flex::column()
         .cross_axis_alignment(CrossAxisAlignment::Fill)
         .with_child(
@@ -92,7 +68,6 @@ pub fn mini_player_widget() -> impl Widget<AppState> {
                 .with_child(controls)
                 .lens(AppState::playback),
         )
-        .with_child(lyrics.align_left())
         .with_flex_child(
             Either::new(
                 |data: &AppState, _| data.mini_lyrics_open,
@@ -101,6 +76,22 @@ pub fn mini_player_widget() -> impl Widget<AppState> {
             ),
             1.0,
         )
+        .on_command(TOGGLE_MINI_LYRICS, |ctx, _, data| {
+            data.mini_lyrics_open = !data.mini_lyrics_open;
+            // The window grows down to fit them.
+            let (width, height) = super::MINI_PLAYER_SIZE;
+            let height = if data.mini_lyrics_open {
+                theme::grid(60.0)
+            } else {
+                height
+            };
+            let width = ctx.window().get_size().width.max(width);
+            ctx.window().set_size(Size::new(width, height));
+            if let (true, Some(now_playing)) = (data.mini_lyrics_open, &data.playback.now_playing) {
+                let show = lyrics::SHOW_LYRICS.with(now_playing.clone());
+                ctx.submit_command(show.to(Target::Global));
+            }
+        })
 }
 
 fn playing_item_widget() -> impl Widget<NowPlaying> {
@@ -275,11 +266,17 @@ fn playback_origin_icon(origin: &PlaybackOrigin) -> &'static SvgIcon {
     }
 }
 
-/// The controls, and in the `mini` player only the way back from it: the
-/// lyrics and the queue are panels of the full layout.
+/// The controls, and in the `mini` player its own lyrics and the way back from
+/// it: the lyrics panel and the queue are the full layout's.
 fn player_widget(mini: bool) -> impl Widget<Playback> {
     let mut panels = Flex::row();
-    if !mini {
+    if mini {
+        panels = panels.with_child(small_button_widget(&icons::MUSIC_NOTE).on_left_click(
+            |ctx, _, _, _| {
+                ctx.submit_command(TOGGLE_MINI_LYRICS);
+            },
+        ));
+    } else {
         panels = panels
             .with_child(
                 small_button_widget(&icons::MUSIC_NOTE).on_left_click(|ctx, _, _, _| {
