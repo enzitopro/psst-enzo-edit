@@ -74,7 +74,10 @@ impl<W: Widget<AppState>> Controller<AppState, W> for KeepWindowSize {
     ) {
         match (event, data.mini_mode) {
             (druid::Event::WindowConnected, _) => keep_min_size(ctx.window()),
-            (druid::Event::WindowSize(_), false) => {
+            // Not a minimized or maximized size, to open with next time.
+            (druid::Event::WindowSize(_), false)
+                if ctx.window().get_window_state() == druid::WindowState::Restored =>
+            {
                 data.config.window_size = ctx.window().get_size();
             }
             _ => {}
@@ -140,7 +143,8 @@ fn keep_min_size(window: &druid::WindowHandle) {
 pub const MINI_PLAYER_SIZE: (f64, f64) = (theme::GRID * 60.0, theme::GRID * 26.0);
 
 pub fn main_window(config: &Config) -> WindowDesc<AppState> {
-    WindowDesc::new(root_widget())
+    // Outermost: druid gives the window's size only to its root widget.
+    WindowDesc::new(root_widget().controller(KeepWindowSize))
         .title(compute_main_window_title)
         // The mini player's; `keep_min_size` holds the full layout's.
         .with_min_size(MINI_PLAYER_SIZE)
@@ -362,7 +366,6 @@ fn root_widget() -> impl Widget<AppState> {
         });
     });
     let root = ThemeScope::new(layout)
-        .controller(KeepWindowSize)
         .controller(SessionController)
         .controller(NavController)
         .controller(SortController)
