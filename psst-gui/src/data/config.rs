@@ -142,6 +142,8 @@ pub struct Config {
     pub show_track_cover: bool,
     /// The Artists page shows a grid of pictures instead of a list.
     pub artists_grid: bool,
+    /// Seconds the end of a track and the start of the next overlap, 0 for none.
+    pub crossfade_secs: u64,
     /// How the sidebar's playlists are sorted, one of Spotify's library orders.
     pub playlist_order: String,
     pub window_size: Size,
@@ -182,6 +184,7 @@ impl Default for Config {
             show_track_cover: Default::default(),
             artists_grid: false,
             playlist_order: "Recents".to_string(),
+            crossfade_secs: 0,
             window_size: Size::new(theme::grid(80.0), theme::grid(100.0)),
             slider_scroll_scale: Default::default(),
             track_sorts: HashMap::new(),
@@ -352,6 +355,7 @@ impl Config {
     pub fn playback(&self) -> PlaybackConfig {
         PlaybackConfig {
             bitrate: self.audio_quality.as_bitrate(),
+            crossfade: std::time::Duration::from_secs(self.crossfade_secs),
             ..PlaybackConfig::default()
         }
     }

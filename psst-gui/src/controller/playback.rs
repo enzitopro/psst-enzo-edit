@@ -196,7 +196,8 @@ impl PlaybackController {
                         .submit_command(cmd::PLAYBACK_RESUMING, (), widget_id)
                         .unwrap();
                 }
-                PlayerEvent::Position { position, .. } => {
+                // Not of a track fading out, the next one is playing.
+                PlayerEvent::Position { position, path } if player.is_current(path) => {
                     let progress = position.to_owned();
                     event_sink
                         .submit_command(cmd::PLAYBACK_PROGRESS, progress, widget_id)
@@ -992,6 +993,14 @@ where
     ) {
         if !old_data.playback.volume.same(&data.playback.volume) {
             self.set_volume(data.playback.volume);
+        }
+
+        if old_data.config.crossfade_secs != data.config.crossfade_secs
+            || old_data.config.audio_quality != data.config.audio_quality
+        {
+            self.send(PlayerEvent::Command(PlayerCommand::Configure {
+                config: data.config.playback(),
+            }));
         }
 
         let lastfm_changed = old_data.config.lastfm_api_key != data.config.lastfm_api_key

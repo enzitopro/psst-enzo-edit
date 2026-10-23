@@ -128,6 +128,12 @@ impl AudioSink for CpalSink {
         self.send_to_callback(CallbackMsg::PlaySource(Box::new(source)));
     }
 
+    fn crossfade(&self, source: impl AudioSource, duration: Duration) {
+        let samples =
+            duration.as_secs_f64() * self.sample_rate.0 as f64 * self.channel_count as f64;
+        self.send_to_callback(CallbackMsg::CrossfadeTo(Box::new(source), samples as usize));
+    }
+
     fn pause(&self) {
         self.send_to_stream(StreamMsg::Pause);
         self.send_to_callback(CallbackMsg::Pause);
@@ -181,6 +187,8 @@ impl Stream {
         let shared = Arc::new(Mutex::new(StreamCallback {
             callback_recv,
             source: Box::new(Empty),
+            fading: None,
+            fade_buffer: vec![0.0; 64 * 1024],
             volume: 1.0, // We start with the full volume.
             state: CallbackState::Paused,
         }));
@@ -391,6 +399,8 @@ impl AudioSource for SharedSource {
 
 enum CallbackMsg {
     PlaySource(Box<dyn AudioSource>),
+    /// The new source, and over how many samples the old one fades out.
+    CrossfadeTo(Box<dyn AudioSource>, usize),
     SetVolume(f32),
     Pause,
     Resume,
@@ -404,8 +414,40 @@ enum CallbackState {
 struct StreamCallback {
     callback_recv: Receiver<CallbackMsg>,
     source: Box<dyn AudioSource>,
+    /// The source fading out under `source`.
+    fading: Option<Fade>,
+    /// Where the fading source writes, allocated once: not in the audio thread.
+    fade_buffer: Vec<f32>,
     state: CallbackState,
     volume: f32,
+}
+
+struct Fade {
+    source: Box<dyn AudioSource>,
+    /// Samples mixed so far, of `length`.
+    done: usize,
+    length: usize,
+}
+
+/// Mixes `old`, fading out, into `new`, fading in, over a fade of `length`
+/// samples of which `done` went: `new[..new_len]` and `old` have the samples
+/// the sources wrote.  Returns how many samples `new` now has.
+fn crossfade_mix(
+    new: &mut [f32],
+    new_len: usize,
+    old: &[f32],
+    done: usize,
+    length: usize,
+) -> usize {
+    let len = new_len.max(old.len()).min(new.len());
+    for (i, sample) in new[..len].iter_mut().enumerate() {
+        // Equal power: the loudness stays even through the fade.
+        let t = ((done + i) as f32 / length.max(1) as f32).min(1.0) * std::f32::consts::FRAC_PI_2;
+        let incoming = if i < new_len { *sample } else { 0.0 };
+        let outgoing = old.get(i).copied().unwrap_or(0.0);
+        *sample = incoming * t.sin() + outgoing * t.cos();
+    }
+    len
 }
 
 impl StreamCallback {
@@ -415,6 +457,15 @@ impl StreamCallback {
             match msg {
                 CallbackMsg::PlaySource(src) => {
                     self.source = src;
+                    self.fading = None;
+                }
+                CallbackMsg::CrossfadeTo(src, length) => {
+                    let source = std::mem::replace(&mut self.source, src);
+                    self.fading = Some(Fade {
+                        source,
+                        done: 0,
+                        length,
+                    });
                 }
                 CallbackMsg::SetVolume(volume) => {
                     self.volume = volume;
@@ -431,7 +482,17 @@ impl StreamCallback {
         let written = if matches!(self.state, CallbackState::Playing) {
             // Write out as many samples as possible from the audio source to the
             // output buffer.
-            let written = self.source.write(output);
+            let mut written = self.source.write(output);
+            if let Some(fade) = &mut self.fading {
+                let len = output.len().min(self.fade_buffer.len());
+                let buffer = &mut self.fade_buffer[..len];
+                let old = fade.source.write(buffer);
+                written = crossfade_mix(output, written, &buffer[..old], fade.done, fade.length);
+                fade.done += written;
+                if old == 0 || fade.done >= fade.length {
+                    self.fading = None;
+                }
+            }
 
             // Apply scaled global volume level.
             let scaled_volume = self.volume.pow(4);
@@ -485,6 +546,26 @@ mod tests {
 
     use super::*;
     use crate::audio::output::{AudioOutput, AudioSink};
+
+    #[test]
+    fn crossfade_fades_one_out_and_the_other_in() {
+        // Halfway through a fade of 8 samples, both sources at 1.0.
+        let mut new = [1.0; 4];
+        let old = [1.0; 4];
+        let len = crossfade_mix(&mut new, 4, &old, 4, 8);
+        assert_eq!(len, 4);
+        // Equal power: sin + cos at a quarter turn is about 1.41, then less.
+        assert!((new[0] - std::f32::consts::SQRT_2).abs() < 0.01);
+        // The new source ended early: the old one still plays, fading.
+        let mut new = [1.0, 1.0, 0.0, 0.0];
+        let len = crossfade_mix(&mut new, 2, &old, 0, 4);
+        assert_eq!(len, 4);
+        assert!(new[3] > 0.0 && new[3] < 1.0);
+        // Past the fade, only the new source is left.
+        let mut new = [0.5; 2];
+        crossfade_mix(&mut new, 2, &[1.0; 2], 10, 4);
+        assert!(new.iter().all(|s| (s - 0.5).abs() < 1e-6));
+    }
 
     /// Needs an audio device, so not on CI.
     #[test]

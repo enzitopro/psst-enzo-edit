@@ -1221,3 +1221,89 @@ fn diagnostics_new_releases_and_stats() {
     println!("  top artist {:?}, top track {:?}", top.artists.first(), top.tracks.first());
     assert!(!releases.is_empty() && !top.artists.is_empty());
 }
+
+/// Two local files (`PSST_DIAG_QUEUE`) crossfading: the second starts before
+/// the first ends, and the first ending then doesn't skip the second.
+#[test]
+#[ignore]
+fn diagnostics_player_crossfade() {
+    use psst_core::{
+        audio::{normalize::NormalizationLevel, output::DefaultAudioOutput},
+        cache::Cache,
+        cdn::Cdn,
+        item_id::ItemId,
+        player::{item::PlaybackItem, PlaybackConfig, Player, PlayerCommand, PlayerEvent},
+    };
+
+    let files: Vec<PathBuf> = std::env::var("PSST_DIAG_QUEUE")
+        .expect("PSST_DIAG_QUEUE=<file>;<file>")
+        .split(';')
+        .map(PathBuf::from)
+        .collect();
+    let items: Vec<PlaybackItem> = files
+        .iter()
+        .take(2)
+        .map(|path| PlaybackItem {
+            item_id: ItemId::from_local(path.clone()),
+            norm_level: NormalizationLevel::Track,
+        })
+        .collect();
+    let output = DefaultAudioOutput::open().expect("audio output");
+    let session = SessionService::empty();
+    let config = PlaybackConfig {
+        crossfade: Duration::from_secs(3),
+        ..PlaybackConfig::default()
+    };
+    let mut player = Player::new(
+        session.clone(),
+        Cdn::new(session, None).unwrap(),
+        Cache::new(std::env::temp_dir().join("psst-diagnostics-cache")).unwrap(),
+        config,
+        &output,
+    );
+    let (sender, receiver) = (player.sender(), player.receiver());
+    sender.send(PlayerEvent::Command(PlayerCommand::SetVolume { volume: 0.0 })).unwrap();
+    sender
+        .send(PlayerEvent::Command(PlayerCommand::LoadQueue { items: items.clone(), position: 0 }))
+        .unwrap();
+    let started = Instant::now();
+    let mut log = Vec::new();
+    let mut first_duration = None;
+    let mut sought = false;
+    while started.elapsed() < Duration::from_secs(14) {
+        let Ok(event) = receiver.recv_timeout(Duration::from_millis(20)) else {
+            continue;
+        };
+        let at = started.elapsed().as_millis();
+        match &event {
+            PlayerEvent::Playing { path, .. } => {
+                let which = items.iter().position(|i| i.item_id == path.item_id).unwrap();
+                log.push(format!("{at:>6} ms playing #{which}"));
+                if which == 0 {
+                    first_duration = Some(path.duration);
+                }
+            }
+            PlayerEvent::EndOfTrack { path } => {
+                let which = items.iter().position(|i| i.item_id == path.item_id).unwrap();
+                log.push(format!("{at:>6} ms end of #{which}"));
+            }
+            _ => {}
+        }
+        player.handle(event);
+        // Near the end of the first, once it plays.
+        if let (false, Some(duration)) = (sought, first_duration) {
+            if started.elapsed() > Duration::from_secs(1) {
+                sought = true;
+                let at = duration - Duration::from_secs(6);
+                sender.send(PlayerEvent::Command(PlayerCommand::Seek { position: at })).unwrap();
+            }
+        }
+    }
+    for line in &log {
+        println!("{line}");
+    }
+    let second = log.iter().position(|l| l.contains("playing #1")).expect("second played");
+    let first_end = log.iter().position(|l| l.contains("end of #0")).expect("first ended");
+    assert!(second < first_end, "the second starts before the first ends");
+    assert_eq!(log.iter().filter(|l| l.contains("playing")).count(), 2, "nothing skipped");
+}

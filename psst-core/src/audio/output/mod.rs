@@ -19,6 +19,8 @@ pub trait AudioSink {
     fn sample_rate(&self) -> u32;
     fn set_volume(&self, volume: f32);
     fn play(&self, source: impl AudioSource);
+    /// Plays `source`, fading the playing one out over `duration` as it fades in.
+    fn crossfade(&self, source: impl AudioSource, duration: std::time::Duration);
     fn pause(&self);
     fn resume(&self);
     fn stop(&self);

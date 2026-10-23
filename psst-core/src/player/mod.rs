@@ -41,6 +41,8 @@ const RETRY_LOADING_AFTER: Duration = Duration::from_secs(1);
 pub struct PlaybackConfig {
     pub bitrate: usize,
     pub pregain: f32,
+    /// How long tracks overlap, the next fading in; none when zero.
+    pub crossfade: Duration,
 }
 
 impl Default for PlaybackConfig {
@@ -48,6 +50,7 @@ impl Default for PlaybackConfig {
         Self {
             bitrate: 320,
             pregain: 3.0,
+            crossfade: Duration::ZERO,
         }
     }
 }
@@ -115,7 +118,7 @@ impl Player {
             PlayerEvent::Loaded { item, result } => self.handle_loaded(item, result),
             PlayerEvent::Preloaded { item, result } => self.handle_preloaded(item, result),
             PlayerEvent::Position { position, path } => self.handle_position(position, path),
-            PlayerEvent::EndOfTrack => self.handle_end_of_track(),
+            PlayerEvent::EndOfTrack { path } => self.handle_end_of_track(path),
             PlayerEvent::Loading { .. }
             | PlayerEvent::Upcoming { .. }
             | PlayerEvent::LoadingFailed { .. }
@@ -263,6 +266,10 @@ impl Player {
     }
 
     fn handle_position(&mut self, new_position: Duration, path: MediaPath) {
+        // A track fading out still reports, the one fading in is playing.
+        if !self.is_current(&path) {
+            return;
+        }
         match &mut self.state {
             PlayerState::Playing { position, .. } | PlayerState::Paused { position, .. } => {
                 *position = new_position;
@@ -278,9 +285,47 @@ impl Player {
                 self.preload(item_to_preload);
             }
         }
+        let crossfade = self.config.crossfade;
+        if !crossfade.is_zero() && time_until_end_of_track <= crossfade {
+            self.start_crossfade(path, crossfade);
+        }
     }
 
-    fn handle_end_of_track(&mut self) {
+    /// Whether `path` is the track playing (or paused), not one fading out.
+    pub fn is_current(&self, path: &MediaPath) -> bool {
+        match &self.state {
+            PlayerState::Playing { path: current, .. }
+            | PlayerState::Paused { path: current, .. } => current.file_id == path.file_id,
+            _ => false,
+        }
+    }
+
+    /// Starts the following track under the end of `playing`, when it's loaded
+    /// already; otherwise the track just ends.  Not into itself (repeat one).
+    fn start_crossfade(&mut self, playing: MediaPath, fade: Duration) {
+        let Some(&following) = self.queue.get_following() else {
+            return;
+        };
+        let preloaded =
+            matches!(&self.preload, PreloadState::Preloaded { item, .. } if *item == following);
+        if !preloaded || following.item_id == playing.item_id {
+            return;
+        }
+        let PreloadState::Preloaded { loaded_item, .. } =
+            mem::replace(&mut self.preload, PreloadState::None)
+        else {
+            return;
+        };
+        log::info!("crossfading into the next track");
+        self.queue.skip_to_following();
+        self.play_loaded_with(*loaded_item, Some(fade));
+    }
+
+    fn handle_end_of_track(&mut self, ended: MediaPath) {
+        // The track that faded out, after the next one took over.
+        if !self.is_current(&ended) {
+            return;
+        }
         if let PlayerState::Playing { path, position } = &self.state {
             // A track "ending" right away usually means its audio stream broke,
             // which looks like a skip.  Leave a trace for diagnosing it.
@@ -427,10 +472,14 @@ impl Player {
     }
 
     fn play_loaded(&mut self, loaded_item: LoadedPlaybackItem) {
+        self.play_loaded_with(loaded_item, None);
+    }
+
+    fn play_loaded_with(&mut self, loaded_item: LoadedPlaybackItem, fade: Option<Duration>) {
         log::info!("starting playback");
         let path = loaded_item.file.path();
         let position = Duration::default();
-        self.playback_mgr.play(loaded_item);
+        self.playback_mgr.play(loaded_item, fade);
         self.state = PlayerState::Playing { path, position };
         self.sender
             .send(PlayerEvent::Playing { path, position })
@@ -723,7 +772,9 @@ pub enum PlayerEvent {
     },
     /// Player has finished playing a track.  `Loading` or `Playing` might
     /// follow if the queue is not empty, `Stopped` will follow if it is.
-    EndOfTrack,
+    EndOfTrack {
+        path: MediaPath,
+    },
     /// The queue is empty.
     Stopped,
     /// What plays after the current track changed (or the track did).

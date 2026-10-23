@@ -45,7 +45,8 @@ impl PlaybackManager {
         }
     }
 
-    pub fn play(&mut self, loaded: LoadedPlaybackItem) {
+    /// Plays `loaded`, crossfading from what plays over `fade`, if any.
+    pub fn play(&mut self, loaded: LoadedPlaybackItem, fade: Option<Duration>) {
         let path = loaded.file.path();
         let source = DecoderSource::new(
             loaded.file,
@@ -58,7 +59,10 @@ impl PlaybackManager {
             && source.channel_count() == self.sink.channel_count()
         {
             // We can start playing the source right away.
-            self.sink.play(source);
+            match fade {
+                Some(fade) => self.sink.crossfade(source, fade),
+                None => self.sink.play(source),
+            }
         } else {
             // Some output streams have different sample rate than the source, so we need to
             // resample before pushing to the sink.
@@ -70,7 +74,10 @@ impl PlaybackManager {
             // Source output streams also have a different channel count. Map the stereo
             // channels and silence the others.
             let source = StereoMappedSource::new(source, self.sink.channel_count());
-            self.sink.play(source);
+            match fade {
+                Some(fade) => self.sink.crossfade(source, fade),
+                None => self.sink.play(source),
+            }
         }
         self.sink.resume();
     }
@@ -210,7 +217,12 @@ impl AudioSource for DecoderSource {
         if position >= total_samples {
             // After reading the total number of samples, we stop. Signal to the upper layer
             // this track is over and short-circuit all further reads from this source.
-            if self.event_send.try_send(PlayerEvent::EndOfTrack).is_ok() {
+            let path = self.file.path();
+            if self
+                .event_send
+                .try_send(PlayerEvent::EndOfTrack { path })
+                .is_ok()
+            {
                 self.end_of_track = true;
             }
         }

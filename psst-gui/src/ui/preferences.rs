@@ -228,6 +228,23 @@ fn general_tab_widget() -> impl Widget<AppState> {
 
     col = col.with_spacer(theme::grid(3.0));
 
+    // Crossfade
+    col = col
+        .with_child(Label::new("Crossfade").with_font(theme::UI_FONT_MEDIUM))
+        .with_spacer(theme::grid(2.0))
+        .with_child(
+            RadioGroup::row(vec![
+                ("Off", 0),
+                ("3 s", 3),
+                ("6 s", 6),
+                ("9 s", 9),
+                ("12 s", 12),
+            ])
+            .lens(AppState::config.then(Config::crossfade_secs)),
+        );
+
+    col = col.with_spacer(theme::grid(3.0));
+
     // Sliders
     col = col
         .with_child(Label::new("Slider Scrolling").with_font(theme::UI_FONT_MEDIUM))
